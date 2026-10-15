@@ -1,0 +1,9 @@
+{
+  "id": "forblog",
+  "name": "ForBlog",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "将 Obsidian 笔记和附件增量发布到本地 Hexo 博客。",
+  "author": "ForBlog contributors",
+  "isDesktopOnly": true
+}

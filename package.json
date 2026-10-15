@@ -1,0 +1,42 @@
+{
+  "name": "forblog",
+  "version": "0.1.0",
+  "description": "Incremental Obsidian to Hexo publishing",
+  "private": true,
+  "type": "module",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs --watch",
+    "build": "tsc --noEmit && node esbuild.config.mjs",
+    "test": "node --import tsx --test tests/core.test.ts tests/publisher.test.ts tests/hexo.test.ts tests/plugin.test.ts",
+    "check": "npm run build && npm test",
+    "package": "npm run build && node scripts/package.mjs",
+    "install:local": "node scripts/install.mjs"
+  },
+  "dependencies": {
+    "remark-gfm": "^4.0.1",
+    "remark-math": "^6.0.0",
+    "remark-parse": "^11.0.0",
+    "unified": "^11.0.5",
+    "yaml": "^2.9.1"
+  },
+  "devDependencies": {
+    "@adobe/css-tools": "^4.3.3",
+    "@types/mdast": "^4.0.4",
+    "@types/node": "^22.15.17",
+    "esbuild": "^0.28.2",
+    "hexo": "7.3.0",
+    "hexo-generator-index": "^4.0.0",
+    "hexo-renderer-ejs": "^2.0.0",
+    "hexo-renderer-marked": "7.0.1",
+    "hexo-renderer-stylus": "^3.0.1",
+    "hexo-theme-fluid": "^1.9.8",
+    "obsidian": "1.14.4",
+    "tsx": "^4.20.0",
+    "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}
