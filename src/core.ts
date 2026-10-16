@@ -190,7 +190,7 @@ export async function planNote(note: ParsedNote, vault: VaultSource, routes: Map
   const publicMeta = { title, date, tags, categories, permalink: `posts/${slug}/`, layout: 'post', disableNunjucks: true };
   const fingerprint = hash(JSON.stringify({ engine: ENGINE, publicMeta, explicitUpdated, converted, assets: [...assets.values()].map(a => [a.path, a.hash]).sort() }));
   const updated = explicitUpdated ?? (previous?.fingerprint === fingerprint ? previous.updated : now);
-  const markdown = `---\n${stringify({ ...publicMeta, updated }).trimEnd()}\n---\n${converted.trimEnd()}\n`;
+  const markdown = `---\n${stringify({ ...publicMeta, ...(previous?.hidden ? { published: false } : {}), updated }).trimEnd()}\n---\n${converted.trimEnd()}\n`;
   return { id, source: note.source, slug, title, date, fingerprint, markdown, assets: [...assets.values()], linkTargets: [...targets].sort(), warnings: [...warnings] };
 }
 
@@ -211,13 +211,14 @@ export async function prepare(vault: VaultSource, requested: string[], manifest:
   }
   const routes = new Map<string, { id: string; slug: string }>();
   for (const [id, entry] of Object.entries(manifest.notes)) {
+    if (entry.hidden) continue;
     const source = ids.get(id) ?? entry.source;
     routes.set(source, { id, slug: entry.slug });
   }
   for (const source of requested) {
     const note = notes.get(source);
     if (!note) throw new Error(`${source}：未设置有效的发布属性`);
-    routes.set(source, identity(note));
+    if (!manifest.notes[identity(note).id]?.hidden) routes.set(source, identity(note));
   }
   const plans: NotePlan[] = [];
   for (const source of new Set(requested)) {

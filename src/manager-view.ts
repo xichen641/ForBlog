@@ -1,13 +1,45 @@
 import { App, ItemView, Modal, Setting, setIcon, type WorkspaceLeaf } from 'obsidian';
 import { articlesInGroup, groupArticles, type ArticleGroup, type ArticleGrouping } from './article-groups';
-import type { BlogArticle } from './types';
+import type { ArticleVisibility, BlogArticle } from './types';
 
 export const ARTICLE_VIEW = 'forblog-articles';
 export interface ArticleManagerHost {
   app: App;
-  articleCatalog(): Promise<{ articles: BlogArticle[]; pending: number; backup?: string }>;
+  articleCatalog(): Promise<{ articles: BlogArticle[]; pending: number; visibilityPending?: number; backup?: string }>;
   unpublishSelection(articles: BlogArticle[]): Promise<boolean>;
   retryArticleDeployment(): Promise<boolean>;
+  setSelectionVisibility(articles: BlogArticle[], visibility: ArticleVisibility): Promise<boolean>;
+}
+
+class EditArticleVisibility extends Modal {
+  private confirmed = false;
+  constructor(app: App, private articles: BlogArticle[], private execute: (visibility: ArticleVisibility) => void) { super(app); }
+  onOpen(): void {
+    this.contentEl.addClass('forblog-confirm-content'); this.titleEl.addClass('forblog-confirm-heading');
+    this.titleEl.setText(`修改 ${this.articles.length} 篇文章的可见性`);
+    this.contentEl.createEl('p', { text: '公开：在博客中展示。隐藏：不生成文章页面，也不显示在首页、归档、分类和搜索中。源码和 Obsidian 原稿保留，可随时恢复公开。' });
+    const choice = this.contentEl.createEl('select', { cls: 'forblog-visibility-select', attr: { 'aria-label': '选择文章可见性' } });
+    const mixed = this.articles.some(article => article.visibility !== this.articles[0]!.visibility);
+    if (mixed) choice.createEl('option', { text: '选择可见性…', value: '' });
+    choice.createEl('option', { text: '公开', value: 'public' }); choice.createEl('option', { text: '隐藏', value: 'hidden' });
+    choice.value = mixed ? '' : this.articles[0]!.visibility;
+    const list = this.contentEl.createEl('ul', { cls: 'forblog-confirm-list' });
+    for (const article of this.articles) {
+      const row = list.createEl('li'); row.createEl('strong', { text: article.title });
+      row.createEl('div', { text: article.key, cls: 'forblog-article-path' });
+    }
+    let disabled: (value: boolean) => void;
+    new Setting(this.contentEl).addButton(button => button.setButtonText('取消').onClick(() => this.close()))
+      .addButton(button => {
+        disabled = value => { button.setDisabled(value); };
+        button.setButtonText('保存并部署').setCta().onClick(() => {
+          if (this.confirmed || !['public', 'hidden'].includes(choice.value) || this.articles.every(article => article.visibility === choice.value)) return;
+          this.confirmed = true; this.close(); this.execute(choice.value as ArticleVisibility);
+        });
+      });
+    const update = () => disabled(!choice.value || this.articles.every(article => article.visibility === choice.value));
+    choice.addEventListener('change', update); update();
+  }
 }
 
 class ConfirmBatchWithdrawal extends Modal {
@@ -48,6 +80,7 @@ export class ArticleManagerView extends ItemView {
   private selection!: HTMLElement;
   private selectionCount!: HTMLElement;
   private clear!: HTMLButtonElement;
+  private visibility!: HTMLButtonElement;
   private modes = new Map<ArticleGrouping, HTMLButtonElement>();
   private message!: HTMLElement;
   private withdraw!: HTMLButtonElement;
@@ -104,12 +137,14 @@ export class ArticleManagerView extends ItemView {
     this.selectionCount = this.selection.createEl('span', { cls: 'forblog-selection-count', attr: { 'aria-live': 'polite' } });
     this.clear = this.selection.createEl('button', { text: '取消选择', cls: 'forblog-text-button', attr: { 'aria-label': '清空选择' } });
     this.clear.addEventListener('click', () => { this.selected.clear(); this.renderRows(); });
+    this.visibility = this.selection.createEl('button', { text: '修改可见性', cls: 'forblog-text-button', attr: { 'aria-label': '修改所选文章可见性' } });
+    this.visibility.addEventListener('click', () => { this.editVisibility(this.articles.filter(article => this.selected.has(article.key))); });
     this.withdraw = this.selection.createEl('button', { text: '下架所选', cls: 'forblog-withdraw', attr: { 'aria-label': '下架所选文章' } });
     this.withdraw.addEventListener('click', () => {
       const selection = this.articles.filter(article => this.selected.has(article.key));
       if (!this.loading && selection.length) new ConfirmBatchWithdrawal(this.app, selection, () => { void this.perform(() => this.host.unpublishSelection(selection)); }).open();
     });
-    this.retry = actions.createEl('button', { text: '重试部署下架变更' });
+    this.retry = actions.createEl('button', { text: '重试部署变更' });
     this.retry.hidden = true;
     this.retry.addEventListener('click', () => { if (this.pending > 0) void this.perform(() => this.host.retryArticleDeployment()); });
     const scroll = shell.createDiv({ cls: 'forblog-article-scroll' });
@@ -120,9 +155,13 @@ export class ArticleManagerView extends ItemView {
       for (const article of this.visibleArticles()) if (this.all.checked) this.selected.add(article.key); else this.selected.delete(article.key);
       this.renderRows();
     });
-    for (const title of ['文章', '来源', '状态', '发布日期']) header.createEl('th', { text: title });
+    for (const title of ['文章', '来源', '可见性', '发布日期']) header.createEl('th', { text: title });
     this.rows = table.createEl('tbody');
     await this.refresh();
+  }
+  private editVisibility(articles: BlogArticle[]): void {
+    if (this.loading || !articles.length || articles.some(article => article.state === 'missing' || article.warning)) return;
+    new EditArticleVisibility(this.app, articles, visibility => { void this.perform(() => this.host.setSelectionVisibility(articles, visibility)); }).open();
   }
   private iconButton(parent: HTMLElement, label: string, icon: string): HTMLButtonElement {
     const button = parent.createEl('button', { cls: 'forblog-icon-button', attr: { 'aria-label': label, title: label, type: 'button' } });
@@ -142,7 +181,8 @@ export class ArticleManagerView extends ItemView {
       this.articles = catalog.articles; this.selected.clear(); this.pending = catalog.pending;
       this.retry.hidden = catalog.pending === 0;
       this.message.hidden = catalog.pending === 0;
-      this.message.setText(catalog.pending ? `${catalog.pending} 篇文章已在本地下架，仍待部署。备份：${catalog.backup}` : '');
+      const visibility = catalog.visibilityPending ?? 0, withdrawn = catalog.pending - visibility;
+      this.message.setText(catalog.pending ? [withdrawn ? `${withdrawn} 篇文章已在本地下架。` : '', visibility ? `${visibility} 篇文章的可见性已修改。` : '', '变更仍待部署，可点击重试。', catalog.backup ? `备份：${catalog.backup}` : ''].join('') : '');
     } catch (error) { if (!this.closed) { this.message.hidden = false; this.message.setText(`读取失败：${error instanceof Error ? error.message : String(error)}`); } }
     finally { this.loading = false; if (!this.closed) this.renderRows(); }
   }
@@ -150,6 +190,7 @@ export class ArticleManagerView extends ItemView {
     if (!this.withdraw) return;
     this.withdraw.disabled = this.loading || !this.selected.size;
     this.clear.disabled = this.loading;
+    this.visibility.disabled = this.loading || !this.selected.size || this.articles.some(article => this.selected.has(article.key) && (article.state === 'missing' || !!article.warning));
     this.selection.hidden = !this.selected.size;
     this.selectionCount.setText(`已选择 ${this.selected.size} 篇`);
     for (const [mode, button] of this.modes) button.setAttribute('aria-pressed', String(mode === this.grouping));
@@ -160,7 +201,7 @@ export class ArticleManagerView extends ItemView {
   private renderRows(): void {
     this.rows.empty();
     const visible = this.visibleArticles();
-    const states = { published: '已推送', pending: '待发布', local: '公开', hidden: '未公开', missing: '源码缺失' };
+    const states = { published: '已推送', pending: '待发布', local: 'Hexo 文章', hidden: '隐藏', missing: '源码缺失' };
     const renderArticle = (article: BlogArticle, depth: number) => {
       const row = this.rows.createEl('tr', { attr: { 'data-article-key': article.key, 'data-selected': String(this.selected.has(article.key)) } });
       const checkbox = row.createEl('td').createEl('input', { type: 'checkbox', attr: { 'aria-label': `选择文章：${article.title}` } });
@@ -177,7 +218,14 @@ export class ArticleManagerView extends ItemView {
       if (this.grouping === 'archive' && article.categoryPaths.length) title.createEl('div', { text: article.categoryPaths.map(parts => parts.join(' / ')).join(' · '), cls: 'forblog-article-categories' });
       if (article.warning) title.createEl('div', { text: article.warning, cls: 'forblog-article-warning' });
       row.createEl('td').createEl('span', { text: article.origin === 'forblog' ? 'ForBlog' : 'Hexo', cls: 'forblog-source-badge' });
-      row.createEl('td').createEl('span', { text: states[article.state], cls: 'forblog-article-state', attr: { 'data-state': article.state } });
+      const visibility = row.createEl('td');
+      const label = article.visibility === 'hidden' ? '隐藏' : '公开';
+      const toggle = visibility.createEl('button', { cls: 'forblog-visibility-button', attr: { 'aria-label': `修改可见性：${article.title}，当前${label}`, title: `${label} · ${states[article.state]}，点击修改可见性`, 'data-visibility': article.visibility } });
+      setIcon(toggle.createEl('span', { cls: 'forblog-icon', attr: { 'aria-hidden': 'true' } }), article.visibility === 'hidden' ? 'eye-off' : 'eye');
+      toggle.createEl('span', { text: label });
+      toggle.disabled = this.loading || article.state === 'missing' || !!article.warning;
+      toggle.addEventListener('click', () => this.editVisibility([article]));
+      if (article.visibilityPending || article.state === 'pending' || article.state === 'missing') visibility.createEl('div', { text: article.visibilityPending ? '待部署' : states[article.state], cls: 'forblog-visibility-pending' });
       row.createEl('td', { text: article.date ? article.date.slice(0, 10) : '—', cls: 'forblog-article-date' });
     };
     const renderGroup = (group: ArticleGroup, depth: number) => {

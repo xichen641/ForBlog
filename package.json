@@ -1,16 +1,20 @@
 {
   "name": "forblog",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Incremental Obsidian to Hexo publishing",
   "private": true,
   "type": "module",
   "main": "main.js",
+  "repository": { "type": "git", "url": "git+https://github.com/xichen641/ForBlog.git" },
+  "homepage": "https://github.com/xichen641/ForBlog#readme",
+  "bugs": { "url": "https://github.com/xichen641/ForBlog/issues" },
   "scripts": {
     "dev": "node esbuild.config.mjs --watch",
     "build": "tsc --noEmit && node esbuild.config.mjs",
-    "test": "node --import tsx --test tests/core.test.ts tests/publisher.test.ts tests/hexo.test.ts tests/plugin.test.ts tests/properties.test.ts tests/process.test.ts tests/git.test.ts tests/articles.test.ts",
+    "test": "node --import tsx --test tests/core.test.ts tests/publisher.test.ts tests/hexo.test.ts tests/plugin.test.ts tests/properties.test.ts tests/process.test.ts tests/git.test.ts tests/articles.test.ts tests/visibility.test.ts",
     "check": "npm run build && npm test",
     "package": "npm run build && node scripts/package.mjs",
+    "validate:release": "node scripts/validate-release.mjs",
     "install:local": "node scripts/install.mjs"
   },
   "dependencies": {
@@ -19,6 +23,9 @@
     "remark-parse": "^11.0.0",
     "unified": "^11.0.5",
     "yaml": "^2.9.1"
+  },
+  "overrides": {
+    "katex": "0.18.2"
   },
   "devDependencies": {
     "@adobe/css-tools": "^4.3.3",

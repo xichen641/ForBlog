@@ -1,6 +1,6 @@
 import { App, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile } from 'obsidian';
 import path from 'node:path';
-import { DEFAULT_SETTINGS, type BlogArticle, type Settings, type VaultSource } from './types';
+import { DEFAULT_SETTINGS, type ArticleVisibility, type BlogArticle, type Settings, type VaultSource } from './types';
 import { ARTICLE_VIEW, ArticleManagerView } from './manager-view';
 import { parseNote, articleUrl, markedForPublishing, safeName } from './core';
 import { Publisher } from './publisher';
@@ -183,10 +183,11 @@ export default class ForBlogPlugin extends Plugin {
     if (!leaf) { leaf = this.app.workspace.getLeaf(true); await leaf.setViewState({ type: ARTICLE_VIEW, active: true }); }
     await this.app.workspace.revealLeaf(leaf);
   }
-  async articleCatalog(): Promise<{ articles: BlogArticle[]; pending: number; backup?: string }> {
+  async articleCatalog(): Promise<{ articles: BlogArticle[]; pending: number; visibilityPending: number; backup?: string }> {
     const publisher = new Publisher({ ...this.settings }, new ObsidianSource(this.app));
     const manifest = await publisher.manifest();
-    return { articles: await publisher.listArticles(), pending: manifest.pendingWithdrawal?.count ?? 0, backup: manifest.pendingWithdrawal?.backup };
+    const visibilityPending = Object.keys(manifest.pendingVisibility ?? {}).length;
+    return { articles: await publisher.listArticles(), pending: (manifest.pendingWithdrawal?.count ?? 0) + visibilityPending, visibilityPending, backup: manifest.pendingWithdrawal?.backup };
   }
   async unpublishSelection(articles: BlogArticle[]): Promise<boolean> {
     return this.task(async publisher => {
@@ -195,6 +196,12 @@ export default class ForBlogPlugin extends Plugin {
     });
   }
   async retryArticleDeployment(): Promise<boolean> { return this.task(async publisher => { await publisher.publish([]); }); }
+  async setSelectionVisibility(articles: BlogArticle[], visibility: ArticleVisibility): Promise<boolean> {
+    return this.task(async publisher => {
+      const result = await publisher.setArticleVisibility(articles, visibility);
+      new Notice(result.count ? `已将 ${result.count} 篇文章设为${visibility === 'hidden' ? '隐藏' : '公开'}并部署；原稿保留。` : '所选文章的可见性未改变。');
+    });
+  }
   private async updateWithdrawalMarkers(articles: BlogArticle[]): Promise<void> {
     const ids = new Set(articles.flatMap(article => article.id ? [article.id] : []));
     if (!ids.size) return;
@@ -268,8 +275,8 @@ class ForBlogSettings extends PluginSettingTab {
     const field = (key: 'blogDir' | 'siteUrl' | 'nodePath' | 'gitPath', name: string, description: string, placeholder = '') => {
       new Setting(containerEl).setName(name).setDesc(description).addText(t => t.setPlaceholder(placeholder).setValue(this.plugin.settings[key]).onChange(async v => { this.plugin.settings[key] = v.trim(); await this.plugin.saveSettings(); }));
     };
-    field('blogDir', 'Hexo 博客目录', '包含 _config.yml、source 和 node_modules 的绝对路径。', 'D:\\Myblog');
-    field('siteUrl', '博客网址', '留空则读取 Hexo url；需要包含项目子路径。', 'https://xichen641.github.io');
+    field('blogDir', 'Hexo 博客目录', '包含 _config.yml、source 和 node_modules 的绝对路径。', 'D:\\Blogs\\Hexo');
+    field('siteUrl', '博客网址', '留空则读取 Hexo url；需要包含项目子路径。', 'https://your-name.github.io');
     field('nodePath', 'Node.js 程序', '可填写 node.exe 的绝对路径；Obsidian 可能没有终端里的 PATH。', 'D:\\nodejs\\node.exe');
     field('gitPath', 'Git 程序', '可填写 git.exe 的绝对路径。', 'D:\\Git\\cmd\\git.exe');
     new Setting(containerEl).setName('预览端口').setDesc('仅监听本机 127.0.0.1。').addText(t => t.setValue(String(this.plugin.settings.previewPort)).onChange(async value => {

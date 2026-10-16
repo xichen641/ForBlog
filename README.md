@@ -1,16 +1,42 @@
 # ForBlog
 
+[English](README.en.md) · [下载插件](https://github.com/xichen641/ForBlog/releases) · [更新记录](CHANGELOG.md) · [反馈问题](https://github.com/xichen641/ForBlog/issues)
+
 将 Obsidian 公开笔记、图片和 PDF 增量同步到本地 Hexo，再通过 Git 发布静态站点。桌面端插件，使用 TypeScript 开发；不依赖 Shell commands，也不需要在笔记中写终端命令。
+
+支持发布属性模板、双链和附件转换、本地预览、归档/分类管理、批量下架，以及单篇/批量切换公开与隐藏。下架保留 Obsidian 原稿。
+
+## 环境与兼容性
+
+| 项目 | 要求与验证范围 |
+| --- | --- |
+| Obsidian | 桌面端 1.14.4 或更高；0.3.0 将原先未经验证的 1.5.0 下限收紧至实际验收版本 |
+| 操作系统 | Windows 已进行真实窗口验收；macOS / Linux 尚未进行真实桌面验收；不支持移动端 |
+| Node.js / Git | 电脑上预先安装 Node.js 20+ 和 Git，插件不会自动安装依赖 |
+| Hexo | 已初始化并安装依赖的本地博客；集成测试使用 Hexo 7.3.0、Fluid 1.9.8 |
+| 博客布局 | `source_dir: source`、`public_dir: public`，单个 Git 部署仓库 |
+
+Node.js 要求指用于构建博客的外部程序；插件本身运行在 Obsidian 内置的桌面运行时。插件当前界面为中文。
 
 ## 安装与首次使用
 
-开发环境需要 Node.js 20+ 和 Git。使用插件的电脑还需要已经安装依赖的 Hexo 博客。
+目前可通过 GitHub Release 手动安装。发布 Release 不代表已通过 Obsidian 社区审核。
+
+1. 打开 [0.3.0 Release](https://github.com/xichen641/ForBlog/releases/tag/0.3.0)，下载 `main.js`、`manifest.json`、`styles.css` 三个附件。
+2. 将三个文件放入目标 Vault 的 `.obsidian/plugins/forblog/`；也可以解压 Release 中的 `forblog-0.3.0.zip`，将里面的 `forblog` 文件夹放入 `.obsidian/plugins/`。
+3. 在 **设置 → 第三方插件** 中启用 ForBlog，填写下面的博客目录、网址和程序路径。
+
+升级时先禁用插件，只替换三个安装文件，再启用；保留 `data.json`，已有设置会继续沿用。首次使用建议先执行预览，确认后再发布。
+
+从源码构建：
 
 ```powershell
-cd D:\LB\ForBlog
+git clone https://github.com/xichen641/ForBlog.git
+cd ForBlog
 npm ci
 npm run check
 npm run package
+npm run validate:release -- 0.3.0
 ```
 
 生成的 `dist/forblog/` 是可直接安装的插件文件夹，包含 `main.js`、`manifest.json` 和 `styles.css`。先在独立的测试 Vault 安装和验证：
@@ -25,8 +51,8 @@ npm run install:local -- "D:\你的测试Vault"
 
 | 字段 | 示例 | 用途 |
 | --- | --- | --- |
-| Hexo 博客目录 | `D:\Myblog` | 包含 `_config.yml`、`source`、`node_modules` 的目录 |
-| 博客网址 | `https://xichen641.github.io` | 可覆盖 Hexo `url`；项目站点需要包含子路径 |
+| Hexo 博客目录 | `D:\Blogs\Hexo` | 包含 `_config.yml`、`source`、`node_modules` 的目录；首次安装默认留空 |
+| 博客网址 | `https://your-name.github.io` | 可覆盖 Hexo `url`；项目站点需要包含子路径 |
 | Node.js 程序 | `D:\nodejs\node.exe` | 运行博客本地安装的 Hexo |
 | Git 程序 | `D:\Git\cmd\git.exe` | 使用现有 SSH 或 Git 凭据管理器认证 |
 | 预览端口 | `4000` | 仅监听 `127.0.0.1` |
@@ -36,7 +62,7 @@ npm run install:local -- "D:\你的测试Vault"
 ```yaml
 deploy:
   type: git
-  repo: git@github.com:xichen641/xichen641.github.io.git
+  repo: git@github.com:your-name/your-name.github.io.git
   branch: main
 ```
 
@@ -108,15 +134,26 @@ blog_slug: clip-reid
 
 分组可折叠、展开，也可以一键勾选整年、整月或某个分类及其子分类中的筛选结果。切换展示方式和筛选时保留已选文章；多分类文章可能在多个分组出现，但只计数一次，批量下架确认页也只出现一次。「全选当前筛选结果」包含折叠分组中的匹配文章，工具栏的「取消选择」会清除全部选择。
 
-页面默认显示紧凑的标题、来源、状态和日期，点击文章标题可展开博客源码和 Obsidian 原笔记路径。选中文章后出现批量操作栏。搜索支持标题、分类和路径，搜索时自动展开匹配分组。窄面板会改成标题加元信息的两行布局，配色跟随当前 Obsidian 主题。
+页面默认显示紧凑的标题、来源、可见性和日期，点击文章标题可展开博客源码和 Obsidian 原笔记路径。选中文章后出现批量操作栏。搜索支持标题、分类和路径，搜索时自动展开匹配分组。窄面板会改成标题加元信息的两行布局，配色跟随当前 Obsidian 主题。
 
-列表包含当前博客 `source/_posts`（含子目录）中的 ForBlog 和原有 Hexo 文章。ForBlog 的「已推送」来自成功推送记录；旧文来源显示「Hexo」、状态显示「公开」，未公开的文章单独标识。About、Links 等独立页面不作为文章处理。
+列表包含当前博客 `source/_posts`（含子目录）中的 ForBlog 和原有 Hexo 文章。可见性显示「公开」或「隐藏」，未完成的修改标注「待部署」。ForBlog 的推送状态可在可见性按钮提示中查看，首次未部署的文章标注「待发布」。About、Links 等独立页面不作为文章处理。
+
+### 修改可见性
+
+点击单篇文章的 **公开 / 隐藏** 按钮，或勾选多篇后点击 **修改可见性**，选择目标状态，再点击 **保存并部署**。确认前会列出所选文章，取消不会写入文件或执行部署；选择与当前状态一致时不能重复保存。
+
+- **公开**：生成文章页面，并出现在博客列表中。
+- **隐藏**：写入 Hexo `published: false`，完整重建并部署后不再生成文章页面，也不显示在首页、归档、分类和搜索中。文章源码仍保留在原位置，可再次设为公开。
+
+两种操作都保留 Obsidian 原稿及 `blog_publish` 标记。ForBlog 会持久保存隐藏状态，后续单篇/批量同步仍保持隐藏；手动给已导出稿设置 `published: false` 后同步，也会保留该状态。ForBlog 独占导出附件会从隐藏文章的公开产物中移除，保留本地源码附件；原 Hexo 共享附件不删除。
+
+修改前会校验当前源码和文章属性，属性损坏或源码缺失时禁用可见性编辑。其他公开 ForBlog 文章仍链接到目标文章时，需先修改链接并同步，或将引用文章一同隐藏；恢复公开时也会检查指向隐藏文章的链接。部署失败保留本地可见性和待部署记录，点击 **重试部署变更** 可继续。
 
 点击 **下架所选** 后，确认页会逐篇列出标题和路径。确认后仅将所选文章的博客源码及 ForBlog 独占导出附件移入 `.forblog/trash/<批次>/`，再清理构建缓存，统一构建、提交和部署一次。原 Hexo 文章的共享附件保留。备份位于构建目录外，不会发布到网站。单篇「下架当前笔记」也使用同一备份机制。
 
 Obsidian 原稿和原始附件保留，只将对应 ForBlog 原稿的 `blog_publish` 改为 `false`；原稿移动后按固定文章 ID 查找。下架记录也会阻止后续批量发布重新创建文章。需要重新发布时，打开原笔记执行「发布当前笔记」并确认发布属性；旧 Hexo 文章可以从备份按原路径恢复后完整重建部署。
 
-列表打开后若文章发生变化，会要求刷新重选。其他未选文章仍引用所选 ForBlog 文章时，会阻止整批操作；可先解除引用，或将引用文章一同选中下架。部署失败会保留备份和待部署记录，页面提供 **重试部署下架变更**，也可使用现有的重试发布命令。
+列表打开后若文章发生变化，会要求刷新重选。其他未选文章仍引用所选 ForBlog 文章时，会阻止整批操作；可先解除引用，或将引用文章一同选中下架。部署失败会保留备份和待部署记录，页面提供 **重试部署变更**，也可使用现有的重试发布命令。
 
 ## 增量更新如何工作
 
@@ -192,3 +229,18 @@ npm run package  # 生成 dist/forblog
 本地检查通过不等同于已验证 Obsidian 实际加载、真实 GitHub 认证或 GitHub Pages 上线。启用插件后，先用测试文章预览，再执行首次真实发布。
 
 开发参考：[Obsidian 插件开发](https://docs.obsidian.md/Plugins/Getting%20started/Build%20a%20plugin)、[Vault API](https://docs.obsidian.md/Plugins/Vault)、[Hexo 生成](https://hexo.io/docs/generating)。
+
+## 数据访问、网络与权限
+
+- 插件通过 Obsidian API 读取笔记和所引用附件；批量发现会读取 Markdown 笔记以查找显式发布标记。保存发布属性、下架等明确操作可能修改笔记 Front Matter，保留原稿正文和原始附件。
+- 插件会访问 Vault 以外由你填写的 Hexo 目录，读取配置、写入导出文章和附件，并在 `.forblog` 内保存状态、部署副本及下架备份。
+- 本地构建启动已安装的 Node.js / Hexo，部署启动 Git。Hexo 及其主题、插件来自你现有的博客环境；ForBlog 不自动下载或安装它们。
+- Git 只连接你在博客中配置的远端，用于读取部署分支和推送，沿用系统 SSH 或凭据管理器。插件没有遥测、独立账号或自营远程服务，不提供访问令牌存储字段；认证信息不要放进仓库 URL。插件配置保存在本地 `data.json`。
+- 预览服务只监听 `127.0.0.1`；浏览器打开预览时，主题或文章配置的外链资源仍可能访问外部网站。打开博客文章会访问配置的博客域名。
+- ForBlog 无需付费或注册；Git 托管服务可能要求账号。隐藏或下架不会清除 Git 历史、托管缓存或第三方已保存的副本。
+
+## 许可证与维护
+
+MIT 许可证。运行时依赖的完整许可声明随 `main.js` 内嵌分发，也包含在安装包的 `THIRD-PARTY-NOTICES.txt` 中。
+
+发布说明和社区提交流程见 [RELEASING.md](RELEASING.md)。问题反馈请使用 [GitHub Issues](https://github.com/xichen641/ForBlog/issues)，附上插件版本、Obsidian 版本和已去除敏感信息的日志。

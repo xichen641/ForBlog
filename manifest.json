@@ -1,9 +1,10 @@
 {
   "id": "forblog",
   "name": "ForBlog",
-  "version": "0.2.2",
-  "minAppVersion": "1.5.0",
-  "description": "将 Obsidian 笔记和附件增量发布到本地 Hexo 博客。",
+  "version": "0.3.0",
+  "minAppVersion": "1.14.4",
+  "description": "Publish notes and attachments to Hexo incrementally, and manage blog posts directly from your vault.",
   "author": "ForBlog contributors",
+  "authorUrl": "https://github.com/xichen641/ForBlog",
   "isDesktopOnly": true
 }

@@ -12,7 +12,7 @@ export interface Settings {
   previewPort: number;
 }
 export const DEFAULT_SETTINGS: Settings = {
-  blogDir: 'D:\\Myblog', siteUrl: '', nodePath: 'node', gitPath: 'git', previewPort: 4000
+  blogDir: '', siteUrl: '', nodePath: 'node', gitPath: 'git', previewPort: 4000
 };
 export interface Asset { path: string; data: Uint8Array; hash: string }
 export interface NotePlan {
@@ -23,17 +23,20 @@ export interface NotePlan {
 export interface ExportedNote {
   source: string; slug: string; title: string; date: string;
   fingerprint: string; updated: string; assets: string[]; linkTargets: string[];
+  hidden?: boolean;
 }
 export interface Manifest {
   version: 1;
   notes: Record<string, ExportedNote>;
-  published: Record<string, { fingerprint: string; slug: string }>;
+  published: Record<string, { fingerprint: string; slug: string; hidden?: boolean }>;
   buildSignature?: string;
   lastCommit?: string;
   rebuildRequired?: boolean;
   withdrawn?: Record<string, { source: string; slug: string; title: string; date: string; backup: string }>;
   pendingWithdrawal?: { count: number; backup: string };
+  pendingVisibility?: Record<string, ArticleVisibility>;
 }
+export type ArticleVisibility = 'public' | 'hidden';
 export interface BlogArticle {
   key: string;
   title: string;
@@ -42,6 +45,8 @@ export interface BlogArticle {
   date: string;
   categoryPaths: string[][];
   fingerprint: string;
+  visibility: ArticleVisibility;
+  visibilityPending?: boolean;
   id?: string;
   noteSource?: string;
   warning?: string;

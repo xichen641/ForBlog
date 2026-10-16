@@ -18,7 +18,7 @@ async function legacyPost(blog: string, name = 'legacy.md', title = '旧 Hexo �
   return file;
 }
 
-const article = (key: string, date: string, categories: string[][] = []): BlogArticle => ({ key, title: key, date, categoryPaths: categories, origin: 'hexo', state: 'local', fingerprint: key });
+const article = (key: string, date: string, categories: string[][] = []): BlogArticle => ({ key, title: key, date, categoryPaths: categories, origin: 'hexo', state: 'local', visibility: 'public', fingerprint: key });
 
 test('categories follow Hexo scalar, flat hierarchy and multiple hierarchy rules', () => {
   assert.deepEqual(categoryPaths('工具'), [['工具']]);

@@ -16,7 +16,7 @@ await fs.mkdir(path.join(blog, 'source', '_posts'), { recursive: true });
 await fs.writeFile(path.join(vault, '.obsidian', 'app.json'), JSON.stringify({ attachmentFolderPath: '附件', alwaysUpdateLinks: true }, null, 2));
 await fs.writeFile(path.join(vault, '.obsidian', 'community-plugins.json'), JSON.stringify(['forblog']));
 for (const name of ['main.js', 'manifest.json', 'styles.css']) await fs.copyFile(path.join(project, name), path.join(vault, '.obsidian', 'plugins', 'forblog', name));
-const git = 'D:\\Git\\cmd\\git.exe';
+const git = process.env.FORBLOG_TEST_GIT ?? 'git';
 const initialized = spawnSync(git, ['init', '--bare', remote], { encoding: 'utf8', windowsHide: true });
 if (initialized.status !== 0) throw new Error(initialized.stderr);
 await fs.symlink(path.join(project, 'node_modules'), path.join(blog, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');

@@ -7,7 +7,7 @@ import path from 'node:path';
 import { stringify } from 'yaml';
 import { parseNote } from '../src/core';
 import { temporary } from './helpers';
-import type { BlogArticle, Settings, VaultSource } from '../src/types';
+import type { ArticleVisibility, BlogArticle, Settings, VaultSource } from '../src/types';
 import type { Publisher } from '../src/publisher';
 
 type Action = (publisher: Publisher, source: VaultSource, log: (line: string) => void) => Promise<void>;
@@ -15,8 +15,9 @@ type PluginApi = {
   onload(): Promise<void>; onunload(): void; settings: Settings;
   task(action: Action, overrides?: Map<string, string>): Promise<void>;
   preview: { start(): Promise<void>; stop(): Promise<void>; url(): string };
-  articleCatalog(): Promise<{ articles: BlogArticle[]; pending: number; backup?: string }>;
+  articleCatalog(): Promise<{ articles: BlogArticle[]; pending: number; visibilityPending?: number; backup?: string }>;
   unpublishSelection(articles: BlogArticle[]): Promise<boolean>;
+  setSelectionVisibility(articles: BlogArticle[], visibility: ArticleVisibility): Promise<boolean>;
 };
 type Command = { id: string; checkCallback?: (checking: boolean) => boolean; callback?: () => void };
 
@@ -87,7 +88,7 @@ async function harness(raw = '# 未发布的笔记\n\n正文不变。\n') {
     }
     addButton(callback: (button: unknown) => void) {
       let title = '';
-      const control = { setButtonText: (value: string) => { title = value; return control; }, setCta: () => control, setWarning: () => control, onClick: (click: () => Promise<void> | void) => { buttons.set(title, click); return control; } };
+      const control = { setButtonText: (value: string) => { title = value; return control; }, setDisabled: (value: boolean) => { disabled.set(title, value); return control; }, setCta: () => control, setWarning: () => control, onClick: (click: () => Promise<void> | void) => { buttons.set(title, click); return control; } };
       callback(control); return this;
     }
   }
@@ -226,9 +227,9 @@ test('actual bundled exporter resumes from saved properties even while the edito
 });
 
 const managerRows: BlogArticle[] = [
-  { key: 'source/_posts/forblog/a.md', id: 'a', noteSource: 'original/a.md', title: 'Obsidian 文章', origin: 'forblog', state: 'published', date: '2026-01-01', fingerprint: 'a', categoryPaths: [['技术', '工具'], ['随笔']] },
-  { key: 'source/_posts/old.md', title: '旧 Hexo 文章', origin: 'hexo', state: 'local', date: '2025-01-01', fingerprint: 'old', categoryPaths: [['技术']] },
-  { key: 'source/_posts/nested/other.md', title: '另一个旧文章', origin: 'hexo', state: 'local', date: '2025-01-02', fingerprint: 'other', categoryPaths: [] }
+  { key: 'source/_posts/forblog/a.md', id: 'a', noteSource: 'original/a.md', title: 'Obsidian 文章', origin: 'forblog', state: 'published', visibility: 'public', date: '2026-01-01', fingerprint: 'a', categoryPaths: [['技术', '工具'], ['随笔']] },
+  { key: 'source/_posts/old.md', title: '旧 Hexo 文章', origin: 'hexo', state: 'local', visibility: 'public', date: '2025-01-01', fingerprint: 'old', categoryPaths: [['技术']] },
+  { key: 'source/_posts/nested/other.md', title: '另一个旧文章', origin: 'hexo', state: 'local', visibility: 'public', date: '2025-01-02', fingerprint: 'other', categoryPaths: [] }
 ];
 
 test('article manager filters, selects and confirms only chosen legacy rows; cancelling changes nothing', async () => {
@@ -239,7 +240,7 @@ test('article manager filters, selects and confirms only chosen legacy rows; can
     h.plugin.unpublishSelection = async selection => { submitted = selection; rows = rows.filter(row => !selection.some(selected => selected.key === row.key)); return true; };
     await h.command('manage-articles');
     const view = h.leaves[0]!.view!, root = view.contentEl;
-    assert.equal(root.all().find(element => element.text === '重试部署下架变更')!.disabled, true);
+    assert.equal(root.all().find(element => element.text === '重试部署变更')!.disabled, true);
     assert.equal(root.all().filter(element => element.attrs['data-article-key']).length, 3);
     const filter = root.all().find(element => element.attrs['aria-label'] === '按文章来源筛选')!;
     filter.value = 'hexo'; filter.fire('change');
@@ -267,7 +268,7 @@ test('manager search/all/clear and pending retry state remain usable without an 
     h.plugin.articleCatalog = async () => ({ articles: managerRows, pending: 2, backup: '.forblog/trash/example' });
     await h.command('manage-articles');
     const root = h.leaves[0]!.view!.contentEl;
-    const retry = root.all().find(element => element.text === '重试部署下架变更')!; assert.equal(retry.hidden, false);
+    const retry = root.all().find(element => element.text === '重试部署变更')!; assert.equal(retry.hidden, false);
     assert.ok(root.all().some(element => element.text.includes('2 篇文章已在本地下架')));
     const search = root.all().find(element => element.attrs['aria-label'] === '搜索博客文章')!;
     search.value = 'nested'; search.fire('input');
@@ -319,6 +320,54 @@ test('manager switches archive/category views, selects groups and deduplicates a
     find('清空选择').fire('click');
     assert.equal(find('下架所选文章').disabled, true);
     assert.equal(h.writes, 0);
+  } finally { await h.cleanup(); }
+});
+
+test('manager offers per-article and deduplicated batch visibility with an explicit save step and safe cancellation', async () => {
+  const h = await harness();
+  try {
+    let rows: BlogArticle[] = managerRows.map((row, index) => index === 2 ? { ...row, visibility: 'hidden', state: 'hidden' } : { ...row });
+    let submitted: BlogArticle[] = [], target: ArticleVisibility | undefined;
+    h.plugin.articleCatalog = async () => ({ articles: rows, pending: 0 });
+    h.plugin.setSelectionVisibility = async (selection, visibility) => {
+      submitted = selection; target = visibility;
+      rows = rows.map(row => selection.some(item => item.key === row.key) ? { ...row, visibility } : row); return true;
+    };
+    await h.command('manage-articles');
+    const root = h.leaves[0]!.view!.contentEl;
+    const find = (label: string) => root.all().find(element => element.attrs['aria-label'] === label)!;
+    find('修改可见性：Obsidian 文章，当前公开').fire('click');
+    assert.equal(h.modals.at(-1)!.titleEl.text, '修改 1 篇文章的可见性');
+    assert.equal(h.disabled.get('保存并部署'), true);
+    let choice = h.modals.at(-1)!.contentEl.all().find(element => element.attrs['aria-label'] === '选择文章可见性')!;
+    choice.value = 'hidden'; choice.fire('change'); assert.equal(h.disabled.get('保存并部署'), false);
+    await h.buttons.get('取消')!(); assert.equal(submitted.length, 0);
+    find('按分类').fire('click');
+    const all = find('全选当前筛选结果'); all.checked = true; all.fire('change');
+    find('修改所选文章可见性').fire('click');
+    assert.equal(h.modals.at(-1)!.titleEl.text, '修改 3 篇文章的可见性');
+    assert.equal(h.modals.at(-1)!.contentEl.all().filter(element => element.tag === 'li').length, 3);
+    choice = h.modals.at(-1)!.contentEl.all().find(element => element.attrs['aria-label'] === '选择文章可见性')!;
+    assert.equal(choice.value, ''); assert.equal(h.disabled.get('保存并部署'), true);
+    choice.value = 'public'; choice.fire('change');
+    await h.buttons.get('保存并部署')!(); await h.tick();
+    assert.equal(submitted.length, 3); assert.equal(new Set(submitted.map(article => article.key)).size, 3); assert.equal(target, 'public');
+    assert.equal(rows.every(row => row.visibility === 'public'), true); assert.equal(h.writes, 0);
+  } finally { await h.cleanup(); }
+});
+
+test('manager distinguishes pending visibility deployment and disables editing missing sources', async () => {
+  const h = await harness();
+  try {
+    const rows: BlogArticle[] = [{ ...managerRows[0]!, state: 'missing' }];
+    h.plugin.articleCatalog = async () => ({ articles: rows, pending: 2, visibilityPending: 2 });
+    await h.command('manage-articles');
+    const root = h.leaves[0]!.view!.contentEl;
+    assert.ok(root.all().some(element => element.text.includes('2 篇文章的可见性已修改')));
+    assert.equal(root.all().find(element => element.text === '重试部署变更')!.hidden, false);
+    assert.equal(root.all().find(element => element.attrs['aria-label'] === '修改可见性：Obsidian 文章，当前公开')!.disabled, true);
+    const all = root.all().find(element => element.attrs['aria-label'] === '全选当前筛选结果')!; all.checked = true; all.fire('change');
+    assert.equal(root.all().find(element => element.attrs['aria-label'] === '修改所选文章可见性')!.disabled, true);
   } finally { await h.cleanup(); }
 });
 

@@ -3,8 +3,9 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { parseDocument, stringify } from 'yaml';
 import { prepare, parseNote, safeName } from './core';
-import { emptyManifest, type BlogArticle, type ExportResult, type Log, type Manifest, type Settings, type VaultSource } from './types';
-import { listBlogArticles, validateArticleSelection } from './articles';
+import { emptyManifest, type ArticleVisibility, type BlogArticle, type ExportResult, type Log, type Manifest, type Settings, type VaultSource } from './types';
+import { listBlogArticles, resolveArticleSelection, validateArticleSelection } from './articles';
+import { articleMetadata, rewriteArticleVisibility } from './visibility';
 import { exists, hash, inside, walk, writeChanged } from './files';
 import { deploy, type DeployResult, type GitTarget } from './git';
 import { run } from './process';
@@ -39,6 +40,7 @@ export class Publisher {
     if (data.version !== 1 || !data.notes || !data.published || Array.isArray(data.notes)) throw new Error('发布记录版本不兼容或损坏');
     for (const [id, entry] of Object.entries(data.notes)) {
       if (!safeName(id) || !entry || !Array.isArray(entry.assets) || !Array.isArray(entry.linkTargets) || typeof entry.source !== 'string' || !safeName(entry.slug, true)) throw new Error('发布记录中存在无效文章');
+      if (entry.hidden !== undefined && typeof entry.hidden !== 'boolean') throw new Error('文章可见性记录格式错误');
       if (entry.assets.some(asset => typeof asset !== 'string' || !asset.startsWith(`assets/forblog/${id}/`))) throw new Error('发布记录中存在越界的附件路径');
       for (const asset of entry.assets) await inside(this.settings.blogDir, `source/${asset}`);
     }
@@ -52,6 +54,13 @@ export class Publisher {
     if (data.pendingWithdrawal) {
       if (!Number.isSafeInteger(data.pendingWithdrawal.count) || data.pendingWithdrawal.count < 1 || typeof data.pendingWithdrawal.backup !== 'string' || !data.pendingWithdrawal.backup.startsWith('.forblog/trash/')) throw new Error('待部署下架记录格式错误');
       await inside(this.settings.blogDir, data.pendingWithdrawal.backup);
+    }
+    if (data.pendingVisibility !== undefined) {
+      if (!data.pendingVisibility || typeof data.pendingVisibility !== 'object' || Array.isArray(data.pendingVisibility)) throw new Error('待部署可见性记录格式错误');
+      for (const [key, visibility] of Object.entries(data.pendingVisibility)) {
+        if (!key.startsWith('source/_posts/') || !['public', 'hidden'].includes(visibility)) throw new Error('待部署可见性记录无效');
+        await inside(this.settings.blogDir, key);
+      }
     }
     return data;
   }
@@ -90,6 +99,14 @@ export class Publisher {
   }
   private async exportUnlocked(requested: string[], manifest: Manifest): Promise<ExportResult> {
     const { siteUrl } = await this.config();
+    for (const [id, entry] of Object.entries(manifest.notes)) if (!entry.hidden) {
+      const file = await inside(this.settings.blogDir, `source/_posts/forblog/${id}.md`);
+      if (await exists(file) && articleMetadata(await fs.readFile(file, 'utf8')).published === false) {
+        entry.hidden = true; manifest.rebuildRequired = true;
+        manifest.pendingVisibility ??= {};
+        manifest.pendingVisibility[`source/_posts/forblog/${id}.md`] = 'hidden';
+      }
+    }
     const now = new Date().toISOString();
     this.log('检查笔记、链接和附件…');
     const plans = await prepare(this.vault, requested, manifest, siteUrl, now);
@@ -115,13 +132,13 @@ export class Publisher {
       manifest.notes[plan.id] = {
         source: plan.source, slug: plan.slug, title: plan.title, date: plan.date,
         fingerprint: plan.fingerprint, updated: String(parseNote(plan.source, plan.markdown).meta.updated),
-        assets: [...currentAssets], linkTargets: plan.linkTargets
+        assets: [...currentAssets], linkTargets: plan.linkTargets, ...(previous?.hidden ? { hidden: true } : {})
       };
       if (manifest.withdrawn) delete manifest.withdrawn[plan.id];
       for (const warning of plan.warnings) this.log(`提示：${warning}`);
     }
     await this.save(manifest);
-    const pending = JSON.stringify(Object.keys(manifest.notes).sort()) !== JSON.stringify(Object.keys(manifest.published).sort()) || Object.entries(manifest.notes).some(([id, note]) => manifest.published[id]?.fingerprint !== note.fingerprint);
+    const pending = !!Object.keys(manifest.pendingVisibility ?? {}).length || JSON.stringify(Object.keys(manifest.notes).sort()) !== JSON.stringify(Object.keys(manifest.published).sort()) || Object.entries(manifest.notes).some(([id, note]) => manifest.published[id]?.fingerprint !== note.fingerprint || !!manifest.published[id]?.hidden !== !!note.hidden);
     this.log(`文章：${changed} 篇有变化，${skipped} 篇未变化`);
     return { manifest, plans, changed, skipped, pending };
   }
@@ -145,7 +162,7 @@ export class Publisher {
     if (!await exists(cli)) throw new Error('博客依赖未安装：请在博客目录执行 npm install');
     const { siteUrl } = await this.config();
     const root = new URL(siteUrl).pathname.replace(/\/$/, '') + '/';
-    await writeChanged(await inside(this.settings.blogDir, '.forblog/hexo.yml'), stringify({ url: siteUrl, root }));
+    await writeChanged(await inside(this.settings.blogDir, '.forblog/hexo.yml'), stringify({ url: siteUrl, root, render_drafts: false }));
     const configArgs = ['--config', '_config.yml,.forblog/hexo.yml'];
     if (force || configChanged) {
       this.log('全局配置变化或请求完整构建，重建 Hexo 缓存…');
@@ -156,6 +173,11 @@ export class Publisher {
     this.log('Hexo 构建完成，正在校验文章和附件…');
     for (const note of Object.values(manifest.notes)) {
       const output = await inside(this.settings.blogDir, `public/posts/${note.slug}/index.html`);
+      if (note.hidden) {
+        if (await exists(output)) throw new Error(`Hexo 仍生成隐藏文章，已阻止部署：${note.slug}`);
+        for (const asset of note.assets) await fs.rm(await inside(this.settings.blogDir, `public/${asset}`), { force: true });
+        continue;
+      }
       if (!await exists(output) || !(await fs.stat(output)).size) throw new Error(`Hexo 未生成文章页面：${note.slug}`);
       for (const asset of note.assets) if (!await exists(await inside(this.settings.blogDir, `public/${asset}`))) throw new Error(`Hexo 未生成附件：${asset}`);
     }
@@ -178,12 +200,64 @@ export class Publisher {
   }
   private async deployUnlocked(manifest: Manifest, target: GitTarget): Promise<DeployResult> {
     const deployment = await deploy(this.settings.blogDir, target, this.settings.gitPath, this.log, this.signal);
-    manifest.published = Object.fromEntries(Object.entries(manifest.notes).map(([id, note]) => [id, { fingerprint: note.fingerprint, slug: note.slug }]));
+    manifest.published = Object.fromEntries(Object.entries(manifest.notes).map(([id, note]) => [id, { fingerprint: note.fingerprint, slug: note.slug, ...(note.hidden ? { hidden: true } : {}) }]));
     manifest.lastCommit = deployment.commit;
     delete manifest.pendingWithdrawal;
+    delete manifest.pendingVisibility;
     await this.save(manifest);
     this.log(deployment.pushed ? 'Git 推送完成；GitHub Pages 上线状态需单独验证' : '静态产物无变化，无需推送');
     return deployment;
+  }
+  async setArticleVisibility(selection: BlogArticle[], visibility: ArticleVisibility, options: { deploy?: boolean } = {}): Promise<{ count: number; deployment?: DeployResult }> {
+    if (!['public', 'hidden'].includes(visibility)) throw new Error('无效的文章可见性');
+    return this.withLock(async () => {
+      const config = await this.config();
+      if (options.deploy !== false && !config.git) throw new Error('请先配置单个 Git 部署目标');
+      const manifest = await this.manifest();
+      const articles = resolveArticleSelection(selection, await listBlogArticles(this.settings.blogDir, manifest), '修改可见性');
+      if (articles.some(article => article.state === 'missing' || article.warning)) throw new Error('所选文章源码缺失或属性格式有误，请修复后重试');
+      const changed = articles.filter(article => article.visibility !== visibility);
+      if (!changed.length) return { count: 0 };
+      const ids = new Set(articles.flatMap(article => article.id ? [article.id] : []));
+      if (visibility === 'hidden') {
+        const references = Object.entries(manifest.notes).filter(([id, note]) => !note.hidden && !ids.has(id) && note.linkTargets.some(target => ids.has(target)));
+        if (references.length) throw new Error(`其他公开文章仍引用所选文章，请先解除链接并发布，或一同隐藏：${references.map(([, note]) => note.title).join('、')}`);
+      } else {
+        const unavailable = articles.filter(article => article.id && manifest.notes[article.id]!.linkTargets.some(target => manifest.notes[target]?.hidden && !ids.has(target)));
+        if (unavailable.length) throw new Error(`文章仍链接到隐藏文章，请先修改链接并同步，或将目标文章一同设为公开：${unavailable.map(article => article.title).join('、')}`);
+      }
+      const edits: { file: string; original: string; next: string }[] = [];
+      for (const article of changed) {
+        const file = await inside(this.settings.blogDir, article.key), original = await fs.readFile(file, 'utf8');
+        if (hash(original) !== article.fingerprint) throw new Error(`文章已改变，请刷新列表：${article.title}`);
+        edits.push({ file, original, next: rewriteArticleVisibility(original, visibility) });
+      }
+      const written: typeof edits = [];
+      try {
+        for (const edit of edits) {
+          if (this.signal?.aborted) throw new Error('操作已取消');
+          await writeChanged(edit.file, edit.next); written.push(edit);
+        }
+        manifest.pendingVisibility ??= {};
+        for (const article of changed) {
+          manifest.pendingVisibility[article.key] = visibility;
+          if (article.id) manifest.notes[article.id]!.hidden = visibility === 'hidden';
+        }
+        manifest.rebuildRequired = true;
+        await this.save(manifest);
+      } catch (error) {
+        for (const edit of written.reverse()) await writeChanged(edit.file, edit.original);
+        throw error;
+      }
+      this.log(`已将 ${changed.length} 篇文章设为${visibility === 'hidden' ? '隐藏' : '公开'}，源码和 Obsidian 原稿保留`);
+      if (options.deploy === false) return { count: changed.length };
+      try {
+        await this.build(manifest, true, true);
+        return { count: changed.length, deployment: await this.deployUnlocked(manifest, config.git!) };
+      } catch (error) {
+        throw new Error(`可见性已保存到本地，部署未完成，可重试部署：${error instanceof Error ? error.message : String(error)}`);
+      }
+    });
   }
   async unpublishArticles(selection: BlogArticle[], options: { deploy?: boolean; updateMarkers?: (articles: BlogArticle[]) => Promise<void> } = {}): Promise<{ count: number; backup: string; deployment?: DeployResult }> {
     return this.withLock(async () => {
@@ -216,6 +290,7 @@ export class Publisher {
           manifest.withdrawn[article.id] = { source: note.source, title: note.title, slug: note.slug, date: note.date, backup };
           delete manifest.notes[article.id];
         }
+        for (const article of articles) if (manifest.pendingVisibility) delete manifest.pendingVisibility[article.key];
         manifest.pendingWithdrawal = { count: (manifest.pendingWithdrawal?.count ?? 0) + articles.length, backup };
         delete manifest.buildSignature; manifest.rebuildRequired = true;
         await this.save(manifest);
