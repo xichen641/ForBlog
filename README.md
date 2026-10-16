@@ -22,8 +22,8 @@ Node.js 要求指用于构建博客的外部程序；插件本身运行在 Obsid
 
 目前可通过 GitHub Release 手动安装。发布 Release 不代表已通过 Obsidian 社区审核。
 
-1. 打开 [0.3.0 Release](https://github.com/xichen641/ForBlog/releases/tag/0.3.0)，下载 `main.js`、`manifest.json`、`styles.css` 三个附件。
-2. 将三个文件放入目标 Vault 的 `.obsidian/plugins/forblog/`；也可以解压 Release 中的 `forblog-0.3.0.zip`，将里面的 `forblog` 文件夹放入 `.obsidian/plugins/`。
+1. 打开 [0.3.1 Release](https://github.com/xichen641/ForBlog/releases/tag/0.3.1)，下载 `main.js`、`manifest.json`、`styles.css` 三个附件。
+2. 将三个文件放入目标 Vault 的 `.obsidian/plugins/forblog/`；也可以解压 Release 中的 `forblog-0.3.1.zip`，将里面的 `forblog` 文件夹放入 `.obsidian/plugins/`。
 3. 在 **设置 → 第三方插件** 中启用 ForBlog，填写下面的博客目录、网址和程序路径。
 
 升级时先禁用插件，只替换三个安装文件，再启用；保留 `data.json`，已有设置会继续沿用。首次使用建议先执行预览，确认后再发布。
@@ -36,7 +36,7 @@ cd ForBlog
 npm ci
 npm run check
 npm run package
-npm run validate:release -- 0.3.0
+npm run validate:release -- 0.3.1
 ```
 
 生成的 `dist/forblog/` 是可直接安装的插件文件夹，包含 `main.js`、`manifest.json` 和 `styles.css`。先在独立的测试 Vault 安装和验证：
@@ -72,7 +72,7 @@ npm run install:local -- "/Users/你的用户名/测试 Vault"
 
 本次 macOS 测试范围、发现的问题和桌面验收状态见 [macOS 验收记录](docs/macos-acceptance.md)。
 
-本次 Mac 适配修复尚未发布到 GitHub Release；验收结论对应当前源码修订，测试时请按上面的步骤从源码构建。
+Mac 适配修复包含在 0.3.1 中；旧的 0.3.0 安装包不包含这些修复。
 
 博客 `_config.yml` 的部署配置示例：
 

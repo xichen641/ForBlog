@@ -1,6 +1,6 @@
 {
   "name": "forblog",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Incremental Obsidian to Hexo publishing",
   "private": true,
   "type": "module",

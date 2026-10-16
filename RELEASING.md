@@ -10,11 +10,11 @@
 
 ## 创建 GitHub Release
 
-将准备好的修改提交并推送到 `main` 后，等待该提交的 **Test and release** 流程通过。它会在 Windows 的 Node.js 20 和 24 上构建、运行测试并验证安装包。
+本项目采用直接合入 `main` 的个人维护流程，不要求创建 PR。将已审查、验证的修改提交并推送到 `main` 后，等待该提交的 **Test and release** 流程通过。它会在 Windows / macOS 与 Node.js 20 / 24 的四种组合上构建、运行测试并验证安装包。
 
 ```powershell
-git tag -a 0.3.0 -m "发布 ForBlog 0.3.0"
-git push origin 0.3.0
+git tag -a 0.3.1 -m "发布 ForBlog 0.3.1"
+git push origin 0.3.1
 ```
 
 标签必须与 `manifest.json` 的 `version` 完全一致，不加 `v`。标签流程会重新测试，使用短期 `GITHUB_TOKEN` 创建草稿、上传完整附件后再公开发布；不需要维护个人访问令牌。

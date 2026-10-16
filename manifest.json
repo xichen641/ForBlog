@@ -1,7 +1,7 @@
 {
   "id": "forblog",
   "name": "ForBlog",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "minAppVersion": "1.14.4",
   "description": "Publish notes and attachments to Hexo incrementally, and manage blog posts directly from your vault.",
   "author": "ForBlog contributors",

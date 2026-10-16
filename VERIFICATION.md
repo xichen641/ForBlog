@@ -1,8 +1,14 @@
 # 本地验证记录
 
-日期：2026-10-16（Asia/Shanghai），ForBlog 0.3.0。
+日期：2026-10-16（Asia/Shanghai），当前准备发布 ForBlog 0.3.1；下方保留各阶段验收记录。
 
 既有 Windows 验收环境：Windows / PowerShell，Node.js v24.14.1，npm 11.11.0。本次 macOS 环境和结果见下节。
+
+## 0.3.1 发布前复核
+
+- 对 macOS 适配提交 `ad688b171069d25af4c5cc591d7c9fefbdb8cbe4` 与 `13e1406` 进行审查，确认合入 main 无冲突；Windows / Node.js 24 完整 65 项测试通过，无跳过，构建和打包校验通过。
+- 发布准备仅在上述代码基础上更新版本和文档，最低 Obsidian 版本保持 1.14.4。四个版本记录统一为 0.3.1，并新增对应 Release 说明。
+- 直接提交到 main，等待 Windows / macOS × Node.js 20 / 24 四组 Actions 验证通过后，才推送 `0.3.1` 标签触发发布。各平台结果以对应提交的 Actions 记录为准。
 
 ## macOS 本地复核
 

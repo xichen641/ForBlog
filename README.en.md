@@ -15,13 +15,13 @@ Features include a publishing-properties form, incremental content and attachmen
 
 ## Install and upgrade
 
-Download `main.js`, `manifest.json` and `styles.css` from the [0.3.0 release](https://github.com/xichen641/ForBlog/releases/tag/0.3.0). Put them in `<vault>/.obsidian/plugins/forblog/`, then enable ForBlog under Settings → Community plugins. Alternatively, extract the `forblog` folder from the release ZIP into `.obsidian/plugins/`.
+Download `main.js`, `manifest.json` and `styles.css` from the [0.3.1 release](https://github.com/xichen641/ForBlog/releases/tag/0.3.1). Put them in `<vault>/.obsidian/plugins/forblog/`, then enable ForBlog under Settings → Community plugins. Alternatively, extract the `forblog` folder from the release ZIP into `.obsidian/plugins/`.
 
 Configure the absolute Hexo directory, site URL, Node.js executable and Git executable in ForBlog settings. Git authentication must already work with the remote configured in the blog's `_config.yml` (`deploy.type: git`, `deploy.repo`, `deploy.branch`). No ForBlog account or subscription is required; your hosting provider may require an account.
 
 On macOS, use `Cmd+P` for the command palette. Run `command -v node` and `command -v git` in Terminal and enter their absolute paths in ForBlog settings, especially when Node.js is installed with nvm: Obsidian launched from the Dock may have a different PATH. See the [macOS acceptance record](docs/macos-acceptance.md) for the verified scope.
 
-The macOS acceptance results apply to the current source revision. These fixes have not been included in a GitHub release yet; build from source to test them.
+The macOS compatibility fixes are included in 0.3.1. The older 0.3.0 assets do not contain these fixes.
 
 To upgrade, disable ForBlog, replace only the three installation files, preserve `data.json`, then enable it again. Existing settings are retained.
 
@@ -51,7 +51,7 @@ Canvas, Dataview execution, SVG attachments and arbitrary Obsidian plugin render
 npm ci
 npm run check
 npm run package
-npm run validate:release -- 0.3.0
+npm run validate:release -- 0.3.1
 ```
 
 See [verification evidence](VERIFICATION.md) and the [release guide](RELEASING.md). GitHub release availability does not imply acceptance into the Obsidian Community directory.
