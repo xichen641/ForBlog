@@ -30,6 +30,21 @@ export interface Manifest {
   published: Record<string, { fingerprint: string; slug: string }>;
   buildSignature?: string;
   lastCommit?: string;
+  rebuildRequired?: boolean;
+  withdrawn?: Record<string, { source: string; slug: string; title: string; date: string; backup: string }>;
+  pendingWithdrawal?: { count: number; backup: string };
+}
+export interface BlogArticle {
+  key: string;
+  title: string;
+  origin: 'forblog' | 'hexo';
+  state: 'published' | 'pending' | 'local' | 'hidden' | 'missing';
+  date: string;
+  categoryPaths: string[][];
+  fingerprint: string;
+  id?: string;
+  noteSource?: string;
+  warning?: string;
 }
 export interface ExportResult {
   manifest: Manifest;

@@ -1,8 +1,10 @@
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { parseDocument, stringify } from 'yaml';
 import { prepare, parseNote, safeName } from './core';
-import { emptyManifest, type ExportResult, type Log, type Manifest, type Settings, type VaultSource } from './types';
+import { emptyManifest, type BlogArticle, type ExportResult, type Log, type Manifest, type Settings, type VaultSource } from './types';
+import { listBlogArticles, validateArticleSelection } from './articles';
 import { exists, hash, inside, walk, writeChanged } from './files';
 import { deploy, type DeployResult, type GitTarget } from './git';
 import { run } from './process';
@@ -40,12 +42,27 @@ export class Publisher {
       if (entry.assets.some(asset => typeof asset !== 'string' || !asset.startsWith(`assets/forblog/${id}/`))) throw new Error('发布记录中存在越界的附件路径');
       for (const asset of entry.assets) await inside(this.settings.blogDir, `source/${asset}`);
     }
+    if (data.withdrawn !== undefined) {
+      if (!data.withdrawn || typeof data.withdrawn !== 'object' || Array.isArray(data.withdrawn)) throw new Error('下架记录格式错误');
+      for (const [id, entry] of Object.entries(data.withdrawn)) {
+        if (!safeName(id) || !entry || typeof entry.source !== 'string' || !safeName(entry.slug, true) || typeof entry.backup !== 'string' || !entry.backup.startsWith('.forblog/trash/')) throw new Error('下架记录中存在无效文章');
+        await inside(this.settings.blogDir, entry.backup);
+      }
+    }
+    if (data.pendingWithdrawal) {
+      if (!Number.isSafeInteger(data.pendingWithdrawal.count) || data.pendingWithdrawal.count < 1 || typeof data.pendingWithdrawal.backup !== 'string' || !data.pendingWithdrawal.backup.startsWith('.forblog/trash/')) throw new Error('待部署下架记录格式错误');
+      await inside(this.settings.blogDir, data.pendingWithdrawal.backup);
+    }
     return data;
   }
   async check(requested: string[]) {
     const { siteUrl } = await this.config();
     const manifest = await this.manifest();
     return prepare(this.vault, requested, manifest, siteUrl, new Date().toISOString());
+  }
+  async listArticles(): Promise<BlogArticle[]> {
+    await this.config();
+    return listBlogArticles(this.settings.blogDir, await this.manifest());
   }
   async withLock<T>(action: () => Promise<T>): Promise<T> {
     const file = await inside(this.settings.blogDir, '.forblog/publish.lock');
@@ -100,6 +117,7 @@ export class Publisher {
         fingerprint: plan.fingerprint, updated: String(parseNote(plan.source, plan.markdown).meta.updated),
         assets: [...currentAssets], linkTargets: plan.linkTargets
       };
+      if (manifest.withdrawn) delete manifest.withdrawn[plan.id];
       for (const warning of plan.warnings) this.log(`提示：${warning}`);
     }
     await this.save(manifest);
@@ -119,6 +137,7 @@ export class Publisher {
     return hash(JSON.stringify({ version: 1, siteUrl: (await this.config()).siteUrl, parts }));
   }
   private async build(manifest: Manifest, force: boolean, changed: boolean): Promise<boolean> {
+    force ||= !!manifest.rebuildRequired;
     const signature = await this.signature();
     const configChanged = !!manifest.buildSignature && manifest.buildSignature !== signature;
     if (!force && !changed && manifest.buildSignature === signature && await exists(path.join(this.settings.blogDir, 'public/index.html'))) return false;
@@ -141,6 +160,7 @@ export class Publisher {
       for (const asset of note.assets) if (!await exists(await inside(this.settings.blogDir, `public/${asset}`))) throw new Error(`Hexo 未生成附件：${asset}`);
     }
     manifest.buildSignature = signature;
+    delete manifest.rebuildRequired;
     await this.save(manifest);
     return true;
   }
@@ -152,30 +172,76 @@ export class Publisher {
       const built = await this.build(result.manifest, !!options.force, result.changed > 0 || result.pending);
       if (options.preview) return { ...result, built };
       // Even a no-change run checks the remote, so an interrupted push can be retried.
-      const deployment = await deploy(this.settings.blogDir, config.git!, this.settings.gitPath, this.log, this.signal);
-      result.manifest.published = Object.fromEntries(Object.entries(result.manifest.notes).map(([id, note]) => [id, { fingerprint: note.fingerprint, slug: note.slug }]));
-      result.manifest.lastCommit = deployment.commit;
-      await this.save(result.manifest);
-      this.log(deployment.pushed ? 'Git 推送完成；GitHub Pages 上线状态需单独验证' : '静态产物无变化，无需推送');
+      const deployment = await this.deployUnlocked(result.manifest, config.git!);
       return { ...result, pending: false, built, deployment };
+    });
+  }
+  private async deployUnlocked(manifest: Manifest, target: GitTarget): Promise<DeployResult> {
+    const deployment = await deploy(this.settings.blogDir, target, this.settings.gitPath, this.log, this.signal);
+    manifest.published = Object.fromEntries(Object.entries(manifest.notes).map(([id, note]) => [id, { fingerprint: note.fingerprint, slug: note.slug }]));
+    manifest.lastCommit = deployment.commit;
+    delete manifest.pendingWithdrawal;
+    await this.save(manifest);
+    this.log(deployment.pushed ? 'Git 推送完成；GitHub Pages 上线状态需单独验证' : '静态产物无变化，无需推送');
+    return deployment;
+  }
+  async unpublishArticles(selection: BlogArticle[], options: { deploy?: boolean; updateMarkers?: (articles: BlogArticle[]) => Promise<void> } = {}): Promise<{ count: number; backup: string; deployment?: DeployResult }> {
+    return this.withLock(async () => {
+      const config = await this.config();
+      if (options.deploy !== false && !config.git) throw new Error('请先配置单个 Git 部署目标');
+      const manifest = await this.manifest();
+      const articles = validateArticleSelection(selection, await listBlogArticles(this.settings.blogDir, manifest), manifest);
+      const backup = `.forblog/trash/${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}`;
+      const moves: { source: string; destination: string }[] = [];
+      for (const article of articles) {
+        const names = [article.key, ...(article.id ? manifest.notes[article.id]!.assets.map(asset => `source/${asset}`) : [])];
+        for (const name of names) {
+          const source = await inside(this.settings.blogDir, name);
+          const destination = await inside(this.settings.blogDir, `${backup}/${name}`);
+          if (await exists(source)) moves.push({ source, destination });
+        }
+      }
+      if (this.signal?.aborted) throw new Error('操作已取消');
+      await writeChanged(await inside(this.settings.blogDir, `${backup}/record.json`), JSON.stringify({ created: new Date().toISOString(), articles }, null, 2) + '\n');
+      const moved: typeof moves = [];
+      try {
+        for (const move of moves) {
+          if (this.signal?.aborted) throw new Error('操作已取消');
+          await fs.mkdir(path.dirname(move.destination), { recursive: true });
+          await fs.rename(move.source, move.destination); moved.push(move);
+        }
+        manifest.withdrawn ??= {};
+        for (const article of articles) if (article.id) {
+          const note = manifest.notes[article.id]!;
+          manifest.withdrawn[article.id] = { source: note.source, title: note.title, slug: note.slug, date: note.date, backup };
+          delete manifest.notes[article.id];
+        }
+        manifest.pendingWithdrawal = { count: (manifest.pendingWithdrawal?.count ?? 0) + articles.length, backup };
+        delete manifest.buildSignature; manifest.rebuildRequired = true;
+        await this.save(manifest);
+      } catch (error) {
+        for (const move of moved.reverse()) {
+          try { await fs.mkdir(path.dirname(move.source), { recursive: true }); await fs.rename(move.destination, move.source); }
+          catch { throw new Error(`下架中断，部分文件保留在备份目录，请检查：${backup}；${String(error)}`); }
+        }
+        throw error;
+      }
+      this.log(`已备份并从博客源码移出 ${articles.length} 篇文章；备份：${backup}`);
+      try {
+        await options.updateMarkers?.(articles);
+        if (options.deploy === false) return { count: articles.length, backup };
+        await this.build(manifest, true, true);
+        const deployment = await this.deployUnlocked(manifest, config.git!);
+        return { count: articles.length, backup, deployment };
+      } catch (error) {
+        throw new Error(`下架已保存到本地，原稿和备份保留（${backup}）。部署未完成，可重试部署：${error instanceof Error ? error.message : String(error)}`);
+      }
     });
   }
   async unpublish(id: string): Promise<void> {
     if (!safeName(id)) throw new Error('无效的文章 ID');
-    await this.withLock(async () => {
-      const manifest = await this.manifest();
-      const entry = manifest.notes[id];
-      if (!entry) throw new Error('该笔记没有本地发布记录');
-      const references = Object.entries(manifest.notes).filter(([other, note]) => other !== id && note.linkTargets.includes(id));
-      if (references.length) throw new Error(`请先解除其他文章对本篇的链接并重新发布：${references.map(([, n]) => n.title).join('、')}`);
-      await fs.rm(await inside(this.settings.blogDir, `source/_posts/forblog/${id}.md`), { force: true });
-      for (const asset of entry.assets) await fs.rm(await inside(this.settings.blogDir, `source/${asset}`), { force: true });
-      delete manifest.notes[id];
-      // A preview-only article can have no published fingerprint. Invalidate
-      // the build separately so its old HTML still gets removed on next build.
-      delete manifest.buildSignature;
-      // Keep published[id] until the subsequent build and push succeeds.
-      await this.save(manifest);
-    });
+    const article = (await this.listArticles()).find(row => row.id === id);
+    if (!article) throw new Error('该笔记没有本地发布记录');
+    await this.unpublishArticles([article], { deploy: false });
   }
 }

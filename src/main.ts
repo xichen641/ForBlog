@@ -1,6 +1,7 @@
 import { App, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile } from 'obsidian';
 import path from 'node:path';
-import { DEFAULT_SETTINGS, type Settings, type VaultSource } from './types';
+import { DEFAULT_SETTINGS, type BlogArticle, type Settings, type VaultSource } from './types';
+import { ARTICLE_VIEW, ArticleManagerView } from './manager-view';
 import { parseNote, articleUrl, markedForPublishing, safeName } from './core';
 import { Publisher } from './publisher';
 import { PreviewServer } from './preview';
@@ -104,6 +105,9 @@ export default class ForBlogPlugin extends Plugin {
     this.settings = { ...DEFAULT_SETTINGS, ...saved };
     this.status = this.addStatusBarItem(); this.status.setText('ForBlog：就绪');
     this.addSettingTab(new ForBlogSettings(this.app, this));
+    this.registerView(ARTICLE_VIEW, leaf => new ArticleManagerView(leaf, this));
+    this.addCommand({ id: 'manage-articles', name: '管理博客文章（批量下架）', callback: () => void this.openArticleManager() });
+    this.addRibbonIcon('library-big', 'ForBlog：文章管理', () => void this.openArticleManager());
     const currentCommand = (id: string, name: string, action: (file: TFile) => void) => this.addCommand({ id, name, checkCallback: checking => {
       const file = this.app.workspace.getActiveFile();
       if (!file || file.extension !== 'md') return false;
@@ -144,19 +148,22 @@ export default class ForBlogPlugin extends Plugin {
       new ConfirmUnpublish(this.app, f.basename, () => void this.task(async (publisher, source) => {
         const id = parseNote(f.path, await source.readNote(f.path)).meta.blog_id;
         if (!safeName(id)) throw new Error('当前笔记没有有效的 blog_id');
-        // Disable the marker even when a subsequent push fails, so batch publish won't recreate it.
-        await publisher.unpublish(id);
-        await this.app.fileManager.processFrontMatter(f, fm => { fm.blog_publish = false; });
-        await publisher.publish([]);
+        const article = (await publisher.listArticles()).find(row => row.id === id);
+        if (!article) throw new Error('该笔记没有本地发布记录');
+        await publisher.unpublishArticles([article], { updateMarkers: rows => this.updateWithdrawalMarkers(rows) });
       })).open();
     });
     this.addCommand({ id: 'publish-changed', name: '发布所有修改的公开笔记（增量）', callback: () => void this.task(async (publisher, source) => {
       const selected: string[] = [];
+      const manifest = await publisher.manifest();
       for (const name of await source.listNotes()) {
         const raw = await source.readNote(name);
-        if (markedForPublishing(raw) && parseNote(name, raw).meta.blog_publish === true) selected.push(name);
+        if (markedForPublishing(raw)) {
+          const meta = parseNote(name, raw).meta;
+          if (meta.blog_publish === true && !manifest.withdrawn?.[String(meta.blog_id)]) selected.push(name);
+        }
       }
-      if (!selected.length) throw new Error('没有设置 blog_publish: true 的笔记');
+      if (!selected.length) throw new Error('没有可批量发布的公开笔记；已下架文章需单独重新发布');
       await publisher.publish(selected);
     }) });
     this.addCommand({ id: 'rebuild', name: '完整重建并发布博客', callback: () => void this.task(async publisher => { await publisher.publish([], { force: true }); }) });
@@ -170,6 +177,38 @@ export default class ForBlogPlugin extends Plugin {
     this.registerEvent(this.app.workspace.on('file-menu', (menu, file) => {
       if (file instanceof TFile && file.extension === 'md') menu.addItem(item => item.setTitle('ForBlog：发布到博客').setIcon('send').onClick(() => void this.noteTask(file, '发布', async publisher => { await publisher.publish([file.path]); })));
     }));
+  }
+  async openArticleManager(): Promise<void> {
+    let leaf = this.app.workspace.getLeavesOfType(ARTICLE_VIEW)[0];
+    if (!leaf) { leaf = this.app.workspace.getLeaf(true); await leaf.setViewState({ type: ARTICLE_VIEW, active: true }); }
+    await this.app.workspace.revealLeaf(leaf);
+  }
+  async articleCatalog(): Promise<{ articles: BlogArticle[]; pending: number; backup?: string }> {
+    const publisher = new Publisher({ ...this.settings }, new ObsidianSource(this.app));
+    const manifest = await publisher.manifest();
+    return { articles: await publisher.listArticles(), pending: manifest.pendingWithdrawal?.count ?? 0, backup: manifest.pendingWithdrawal?.backup };
+  }
+  async unpublishSelection(articles: BlogArticle[]): Promise<boolean> {
+    return this.task(async publisher => {
+      const result = await publisher.unpublishArticles(articles, { updateMarkers: rows => this.updateWithdrawalMarkers(rows) });
+      new Notice(`已下架 ${result.count} 篇文章；原稿保留，博客源码已备份。`);
+    });
+  }
+  async retryArticleDeployment(): Promise<boolean> { return this.task(async publisher => { await publisher.publish([]); }); }
+  private async updateWithdrawalMarkers(articles: BlogArticle[]): Promise<void> {
+    const ids = new Set(articles.flatMap(article => article.id ? [article.id] : []));
+    if (!ids.size) return;
+    const matches = new Map<string, TFile[]>();
+    for (const file of this.app.vault.getMarkdownFiles()) {
+      let meta: Record<string, unknown>;
+      try { meta = parseNote(file.path, await this.app.vault.read(file)).meta; } catch { continue; }
+      if (typeof meta.blog_id === 'string' && ids.has(meta.blog_id)) matches.set(meta.blog_id, [...matches.get(meta.blog_id) ?? [], file]);
+    }
+    for (const files of matches.values()) if (files.length > 1) throw new Error(`多个原笔记使用相同文章身份，请先处理：${files.map(file => file.path).join('、')}`);
+    for (const [id, files] of matches) await this.app.fileManager.processFrontMatter(files[0]!, fm => {
+      if (fm.blog_id !== id) throw new Error('原笔记身份已改变，请重新检查发布属性');
+      fm.blog_publish = false;
+    });
   }
   private async noteTask(file: TFile, continuation?: string, action?: (publisher: Publisher, source: VaultSource, log: (line: string) => void) => Promise<void>): Promise<void> {
     if (this.busy || this.preparing) { new Notice('ForBlog 正在处理另一个任务'); return; }
@@ -198,8 +237,8 @@ export default class ForBlogPlugin extends Plugin {
     // Create the publishing snapshot after the form has saved, never before it.
     if (action) await this.task(action, overrides);
   }
-  private async task(action: (publisher: Publisher, source: VaultSource, log: (line: string) => void) => Promise<void>, overrides?: Map<string, string>): Promise<void> {
-    if (this.busy || this.preparing) { new Notice('ForBlog 正在处理另一个任务'); return; }
+  private async task(action: (publisher: Publisher, source: VaultSource, log: (line: string) => void) => Promise<void>, overrides?: Map<string, string>): Promise<boolean> {
+    if (this.busy || this.preparing) { new Notice('ForBlog 正在处理另一个任务'); return false; }
     this.busy = true; this.controller = new AbortController();
     this.status.setText('ForBlog：处理中');
     const modal = new ProgressModal(this.app, () => this.controller?.abort()); modal.open();
@@ -208,9 +247,11 @@ export default class ForBlogPlugin extends Plugin {
     try {
       await action(new Publisher({ ...this.settings }, source, log, this.controller.signal), source, log);
       log('任务完成'); this.status.setText('ForBlog：就绪');
+      return true;
     } catch (error) {
       const message = redact(error instanceof Error ? error.message : String(error));
       log(`失败：${message}`); new Notice(`ForBlog：${message}`, 9000); this.status.setText('ForBlog：操作失败');
+      return false;
     } finally { modal.finish(); this.busy = false; this.controller = undefined; }
   }
   onunload(): void { this.propertiesModal?.close(); this.controller?.abort(); void this.preview.stop(); }
@@ -223,6 +264,7 @@ class ForBlogSettings extends PluginSettingTab {
     const { containerEl } = this; containerEl.empty();
     containerEl.createEl('h2', { text: 'ForBlog' });
     containerEl.createEl('p', { text: '将公开笔记增量同步到本地 Hexo，再通过现有 Git 认证发布。' });
+    new Setting(containerEl).setName('博客文章管理').setDesc('查看 ForBlog 和原有 Hexo 文章，勾选后批量下架，保留原稿。').addButton(button => button.setButtonText('打开文章管理').onClick(() => { void this.plugin.openArticleManager(); }));
     const field = (key: 'blogDir' | 'siteUrl' | 'nodePath' | 'gitPath', name: string, description: string, placeholder = '') => {
       new Setting(containerEl).setName(name).setDesc(description).addText(t => t.setPlaceholder(placeholder).setValue(this.plugin.settings[key]).onChange(async v => { this.plugin.settings[key] = v.trim(); await this.plugin.saveSettings(); }));
     };
