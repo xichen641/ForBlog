@@ -9,7 +9,7 @@ Features include a publishing-properties form, incremental content and attachmen
 ## Requirements
 
 - Obsidian desktop 1.14.4 or later. This conservative minimum matches the version used for desktop acceptance; older versions have not been verified.
-- Windows desktop acceptance has been performed. macOS and Linux desktop behavior remains unverified; mobile is unsupported.
+- Windows and macOS Apple Silicon desktop acceptance has been performed. All 65 automated tests pass on the tested Mac. Linux and Intel Mac remain unverified; mobile is unsupported.
 - Node.js 20+ and Git installed separately, plus an initialized local Hexo blog with its dependencies already installed. The plugin does not install dependencies.
 - Integration fixtures use Hexo 7.3.0 and Fluid 1.9.8. The blog must use `source` and `public` directories and one Git deployment repository.
 
@@ -18,6 +18,10 @@ Features include a publishing-properties form, incremental content and attachmen
 Download `main.js`, `manifest.json` and `styles.css` from the [0.3.0 release](https://github.com/xichen641/ForBlog/releases/tag/0.3.0). Put them in `<vault>/.obsidian/plugins/forblog/`, then enable ForBlog under Settings → Community plugins. Alternatively, extract the `forblog` folder from the release ZIP into `.obsidian/plugins/`.
 
 Configure the absolute Hexo directory, site URL, Node.js executable and Git executable in ForBlog settings. Git authentication must already work with the remote configured in the blog's `_config.yml` (`deploy.type: git`, `deploy.repo`, `deploy.branch`). No ForBlog account or subscription is required; your hosting provider may require an account.
+
+On macOS, use `Cmd+P` for the command palette. Run `command -v node` and `command -v git` in Terminal and enter their absolute paths in ForBlog settings, especially when Node.js is installed with nvm: Obsidian launched from the Dock may have a different PATH. See the [macOS acceptance record](docs/macos-acceptance.md) for the verified scope.
+
+The macOS acceptance results apply to the current source revision. These fixes have not been included in a GitHub release yet; build from source to test them.
 
 To upgrade, disable ForBlog, replace only the three installation files, preserve `data.json`, then enable it again. Existing settings are retained.
 

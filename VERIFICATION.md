@@ -2,12 +2,21 @@
 
 日期：2026-10-16（Asia/Shanghai），ForBlog 0.3.0。
 
-环境：Windows / PowerShell，Node.js v24.14.1，npm 11.11.0。
+既有 Windows 验收环境：Windows / PowerShell，Node.js v24.14.1，npm 11.11.0。本次 macOS 环境和结果见下节。
+
+## macOS 本地复核
+
+- 2026-10-16 在 macOS 27.0.1 / arm64、Node.js v24.21.0、npm 11.19.0、Apple Git 2.54.0 上执行构建和全部测试。
+- 首轮 61/63 通过，取消和超时的两个进程树测试失败：POSIX `kill` 发出信号后立即返回，测试可观察到尚未回收的进程。已改为等待进程组消失后再返回，最多等待 5 秒；修复后 63/63 通过，无跳过。
+- 真实阅读视图中发现外部更新的 V2 正文仍按隐藏编辑器旧 V1 发布的问题。仅对编辑视图保留编辑器快照，阅读视图改读 Vault；新增“阅读视图最新内容”和“编辑视图未落盘内容优先”两个打包插件回归测试，最终 65/65 通过，无跳过。
+- `npm run package` 与 `npm run validate:release -- 0.3.0` 通过；安装到含中文和空格路径的独立测试 Vault。
+- GitHub Actions 测试矩阵新增 macOS + Node.js 20 / 24；本轮记录仅确认本机结果，线上矩阵的运行结果须另行核对。
+- 真实 Obsidian 1.14.4 窗口通过命令注册、属性取消/保存继续预览、首次与重复发布、正文/图片独立增量更新、文章管理分类选择、隐藏/恢复、旧 Hexo 文章备份下架和缺失附件错误检查。全部发布目标为本地裸仓库，具体提交与证据见 [macOS 验收记录](docs/macos-acceptance.md)。
 
 ## 0.3.0 Release 准备复核
 
 - 2026-10-16 从锁文件重新 `npm ci` 后执行完整 `npm run check`：63 项测试全部通过，无跳过；包含构建、真实临时 Hexo / Fluid 和本地 Git 发布、可见性恢复与失败重试。
-- 最低 Obsidian 版本声明调整为真实窗口验收过的 1.14.4，保持 `isDesktopOnly: true`。macOS / Linux 没有真实桌面验收，不能据此宣称跨平台已验证。
+- 最低 Obsidian 版本声明调整为真实窗口验收过的 1.14.4，保持 `isDesktopOnly: true`。当次 Release 准备仅有 Windows 桌面验收；后续 macOS 复核见上节，Linux 尚未验收。
 - 首次安装的博客目录默认留空；已保存配置仍通过合并设置保留。设置页与 README 示例改为通用路径和域名。
 - 新增 Release 校验：版本一致性、标签匹配、安装包逐字节一致性、JavaScript / CSS 解析、外部模块白名单、许可证及开发源码映射检查。
 - KaTeX 间接依赖锁定至修复版本 0.18.2；`npm audit --omit=dev` 报告 0 项漏洞。完整开发依赖审计仍有 9 项告警（7 high、2 moderate），来自 Hexo 测试依赖链中的 `braces` / `sprintf-js`，当前最新版本仍受影响；未执行会降级 Hexo 的 `npm audit fix --force`。这些测试依赖与 KaTeX 渲染器不进入插件 JavaScript，发布校验通过 esbuild 模块清单检查。

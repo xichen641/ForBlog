@@ -5,7 +5,8 @@ import { spawnSync } from 'node:child_process';
 import { stringify } from 'yaml';
 
 const project = fileURLToPath(new URL('../', import.meta.url));
-const root = path.join(project, '.acceptance', 'desktop-20261015');
+const date = new Date().toISOString().slice(0, 10).replaceAll('-', '');
+const root = process.argv[2] ? path.resolve(process.argv[2]) : path.join(project, '.acceptance', `desktop-${date}`);
 const vault = path.join(root, 'ForBlog验收');
 const blog = path.join(root, 'hexo-blog');
 const remote = path.join(root, 'remote.git');

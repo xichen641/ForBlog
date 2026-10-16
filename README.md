@@ -11,7 +11,7 @@
 | 项目 | 要求与验证范围 |
 | --- | --- |
 | Obsidian | 桌面端 1.14.4 或更高；0.3.0 将原先未经验证的 1.5.0 下限收紧至实际验收版本 |
-| 操作系统 | Windows 已进行真实窗口验收；macOS / Linux 尚未进行真实桌面验收；不支持移动端 |
+| 操作系统 | Windows、macOS Apple Silicon 已进行真实窗口验收；macOS 完整自动测试 65 项通过；Linux / Intel Mac 尚未验收；不支持移动端 |
 | Node.js / Git | 电脑上预先安装 Node.js 20+ 和 Git，插件不会自动安装依赖 |
 | Hexo | 已初始化并安装依赖的本地博客；集成测试使用 Hexo 7.3.0、Fluid 1.9.8 |
 | 博客布局 | `source_dir: source`、`public_dir: public`，单个 Git 部署仓库 |
@@ -56,6 +56,23 @@ npm run install:local -- "D:\你的测试Vault"
 | Node.js 程序 | `D:\nodejs\node.exe` | 运行博客本地安装的 Hexo |
 | Git 程序 | `D:\Git\cmd\git.exe` | 使用现有 SSH 或 Git 凭据管理器认证 |
 | 预览端口 | `4000` | 仅监听 `127.0.0.1` |
+
+### macOS 配置
+
+在终端执行 `command -v node` 和 `command -v git`，将各自输出的绝对路径填入插件设置。通过 Dock 启动的 Obsidian 可能没有终端中的 PATH，尤其是通过 nvm 安装的 Node.js；此时仅填写 `node` 可能无法启动构建。博客目录填写 Mac 上包含 `_config.yml` 的实际绝对路径。
+
+Mac 上用 `Cmd+P` 打开命令面板。源码安装示例：
+
+```sh
+npm ci
+npm run check
+npm run package
+npm run install:local -- "/Users/你的用户名/测试 Vault"
+```
+
+本次 macOS 测试范围、发现的问题和桌面验收状态见 [macOS 验收记录](docs/macos-acceptance.md)。
+
+本次 Mac 适配修复尚未发布到 GitHub Release；验收结论对应当前源码修订，测试时请按上面的步骤从源码构建。
 
 博客 `_config.yml` 的部署配置示例：
 

@@ -9,7 +9,15 @@ export class ProcessCleanupError extends Error {}
 async function terminateTree(pid: number): Promise<void> {
   if (process.platform !== 'win32') {
     try { process.kill(-pid, 'SIGKILL'); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
-    return;
+    // kill() only sends the signal. Wait for the process group to disappear,
+    // including children and zombies awaiting reaping, before reporting cleanup.
+    const deadline = Date.now() + 5_000;
+    while (true) {
+      try { process.kill(-pid, 0); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') return; throw error; }
+      if (Date.now() >= deadline) throw new Error('进程组在终止后仍未退出');
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
   }
   // Git for Windows starts another git.exe, ssh.exe and index-pack. Killing only
   // the wrapper leaves those children holding the destination and output pipes.

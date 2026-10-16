@@ -21,7 +21,7 @@ type PluginApi = {
 };
 type Command = { id: string; checkCallback?: (checking: boolean) => boolean; callback?: () => void };
 
-async function harness(raw = '# 未发布的笔记\n\n正文不变。\n') {
+async function harness(raw = '# 未发布的笔记\n\n正文不变。\n', mode: 'source' | 'preview' = 'source') {
   const temp = await temporary();
   const commands: Command[] = [], modals: MockModal[] = [], notices: string[] = [];
   const values = new Map<string, string>(), textChanges = new Map<string, (value: string) => void>();
@@ -48,7 +48,7 @@ async function harness(raw = '# 未发布的笔记\n\n正文不变。\n') {
   type MockView = { contentEl: Element; onOpen(): Promise<void>; getViewType(): string };
   const views = new Map<string, (leaf: unknown) => MockView>();
   const leaves: { view?: MockView; setViewState(state: { type: string }): Promise<void> }[] = [];
-  class MockMarkdownView { file = file; editor = { getValue: () => raw }; }
+  class MockMarkdownView { file = file; editor = { getValue: () => raw }; getMode() { return mode; } }
   const app = {
     workspace: {
       getActiveFile: () => file, getLeavesOfType: (type: string) => type === 'markdown' ? [{ view: new MockMarkdownView() }] : leaves.filter(leaf => leaf.view?.getViewType() === type),
@@ -225,6 +225,25 @@ test('actual bundled exporter resumes from saved properties even while the edito
     assert.equal(JSON.parse(await fs.readFile(path.join(h.temp.root, '.forblog/manifest.json'), 'utf8')).notes[id].source, h.file.path);
   } finally { await h.cleanup(); }
 });
+
+for (const mode of ['preview', 'source'] as const) {
+  test(`bundled exporter uses ${mode === 'preview' ? 'updated vault content in reading view' : 'unsaved editor content in source view'}`, async () => {
+    const header = '---\ntitle: Snapshot\nblog_id: snapshot\nblog_slug: snapshot\nblog_publish: true\ndate: "2026-10-16"\n---\n';
+    const editorBody = mode === 'preview' ? 'stale editor V1' : 'unsaved editor V2';
+    const diskBody = mode === 'preview' ? 'updated vault V2' : 'saved vault V1';
+    const h = await harness(header + editorBody, mode);
+    try {
+      h.app.vault.read = async () => header + diskBody;
+      await fs.mkdir(path.join(h.temp.root, 'source/_posts'), { recursive: true });
+      await fs.writeFile(path.join(h.temp.root, '_config.yml'), 'url: https://blog.example.test\n');
+      await h.plugin.task(async publisher => { await publisher.export([h.file.path]); });
+      const output = await fs.readFile(path.join(h.temp.root, 'source/_posts/forblog/snapshot.md'), 'utf8');
+      assert.ok(output.includes(mode === 'preview' ? diskBody : editorBody));
+      assert.ok(!output.includes(mode === 'preview' ? editorBody : diskBody));
+      assert.equal(h.notices.some(message => /失败/.test(message)), false);
+    } finally { await h.cleanup(); }
+  });
+}
 
 const managerRows: BlogArticle[] = [
   { key: 'source/_posts/forblog/a.md', id: 'a', noteSource: 'original/a.md', title: 'Obsidian 文章', origin: 'forblog', state: 'published', visibility: 'public', date: '2026-01-01', fingerprint: 'a', categoryPaths: [['技术', '工具'], ['随笔']] },

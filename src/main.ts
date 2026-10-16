@@ -12,7 +12,9 @@ class ObsidianSource implements VaultSource {
   private snapshots = new Map<string, string>();
   constructor(private app: App, overrides?: Map<string, string>) {
     for (const leaf of app.workspace.getLeavesOfType('markdown')) {
-      if (leaf.view instanceof MarkdownView && leaf.view.file) this.snapshots.set(leaf.view.file.path, leaf.view.editor.getValue());
+      // Reading views can retain a stale hidden editor after an external edit.
+      // Only a source view owns an active editor snapshot; otherwise read the vault.
+      if (leaf.view instanceof MarkdownView && leaf.view.file && leaf.view.getMode() === 'source') this.snapshots.set(leaf.view.file.path, leaf.view.editor.getValue());
     }
     // Front Matter writes can finish before the open editor/cache refreshes.
     for (const [name, raw] of overrides ?? []) this.snapshots.set(name, raw);
@@ -275,10 +277,13 @@ class ForBlogSettings extends PluginSettingTab {
     const field = (key: 'blogDir' | 'siteUrl' | 'nodePath' | 'gitPath', name: string, description: string, placeholder = '') => {
       new Setting(containerEl).setName(name).setDesc(description).addText(t => t.setPlaceholder(placeholder).setValue(this.plugin.settings[key]).onChange(async v => { this.plugin.settings[key] = v.trim(); await this.plugin.saveSettings(); }));
     };
-    field('blogDir', 'Hexo 博客目录', '包含 _config.yml、source 和 node_modules 的绝对路径。', 'D:\\Blogs\\Hexo');
+    const windows = process.platform === 'win32';
+    const blogExample = windows ? 'D:\\Blogs\\Hexo' : process.platform === 'darwin' ? '/Users/your-name/Blogs/Hexo' : '/home/your-name/Blogs/Hexo';
+    const nodeExample = windows ? 'D:\\nodejs\\node.exe' : process.platform === 'darwin' ? process.arch === 'arm64' ? '/opt/homebrew/bin/node' : '/usr/local/bin/node' : '/usr/bin/node';
+    field('blogDir', 'Hexo 博客目录', '包含 _config.yml、source 和 node_modules 的绝对路径。', blogExample);
     field('siteUrl', '博客网址', '留空则读取 Hexo url；需要包含项目子路径。', 'https://your-name.github.io');
-    field('nodePath', 'Node.js 程序', '可填写 node.exe 的绝对路径；Obsidian 可能没有终端里的 PATH。', 'D:\\nodejs\\node.exe');
-    field('gitPath', 'Git 程序', '可填写 git.exe 的绝对路径。', 'D:\\Git\\cmd\\git.exe');
+    field('nodePath', 'Node.js 程序', '可填写 Node.js 可执行文件的绝对路径；Obsidian 可能没有终端里的 PATH。', nodeExample);
+    field('gitPath', 'Git 程序', '可填写 Git 可执行文件的绝对路径。', windows ? 'D:\\Git\\cmd\\git.exe' : '/usr/bin/git');
     new Setting(containerEl).setName('预览端口').setDesc('仅监听本机 127.0.0.1。').addText(t => t.setValue(String(this.plugin.settings.previewPort)).onChange(async value => {
       const port = Number(value); if (Number.isSafeInteger(port) && port >= 1024 && port <= 65535) { this.plugin.settings.previewPort = port; await this.plugin.saveSettings(); }
     }));
