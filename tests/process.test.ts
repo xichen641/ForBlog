@@ -1,6 +1,28 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { run } from '../src/process';
+import { run, waitForProcessGroupExit } from '../src/process';
+
+test('group cleanup waits through transient EPERM until ESRCH confirms disappearance', async t => {
+  const responses = ['EPERM', undefined, 'ESRCH'];
+  t.mock.method(process, 'kill', (pid: number, signal: number | string) => {
+    assert.equal(pid, -12345); assert.equal(signal, 0);
+    const code = responses.shift();
+    if (code) throw Object.assign(new Error(code), { code });
+    return true;
+  });
+  await waitForProcessGroupExit(12345);
+  assert.equal(responses.length, 0);
+});
+
+test('persistent EPERM is a cleanup failure, never evidence of a missing group', async t => {
+  t.mock.method(process, 'kill', () => { throw Object.assign(new Error('EPERM'), { code: 'EPERM' }); });
+  await assert.rejects(waitForProcessGroupExit(12345, 0), /仍未退出/);
+});
+
+test('group cleanup propagates unexpected probe errors', async t => {
+  t.mock.method(process, 'kill', () => { throw Object.assign(new Error('EINVAL'), { code: 'EINVAL' }); });
+  await assert.rejects(waitForProcessGroupExit(12345), { code: 'EINVAL' });
+});
 
 test('command output streams before exit, decodes UTF8, strips ANSI and redacts progress', async () => {
   const lines: string[] = [];

@@ -6,18 +6,29 @@ import type { Log } from './types';
 export interface CommandResult { code: number; stdout: string; stderr: string }
 export class ProcessCleanupError extends Error {}
 
+export async function waitForProcessGroupExit(pid: number, timeout = 5_000): Promise<void> {
+  const deadline = Date.now() + timeout;
+  while (true) {
+    try { process.kill(-pid, 0); }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ESRCH') return;
+      // Darwin can return EPERM while a killed group's zombies await reaping.
+      // Keep waiting: EPERM alone never proves that the group has disappeared.
+      if (code !== 'EPERM') throw error;
+    }
+    if (Date.now() >= deadline) throw new Error('进程组在终止后仍未退出');
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+}
+
 async function terminateTree(pid: number): Promise<void> {
   if (process.platform !== 'win32') {
     try { process.kill(-pid, 'SIGKILL'); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
     // kill() only sends the signal. Wait for the process group to disappear,
     // including children and zombies awaiting reaping, before reporting cleanup.
-    const deadline = Date.now() + 5_000;
-    while (true) {
-      try { process.kill(-pid, 0); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') return; throw error; }
-      if (Date.now() >= deadline) throw new Error('进程组在终止后仍未退出');
-      await new Promise(resolve => setTimeout(resolve, 20));
-    }
+    await waitForProcessGroupExit(pid);
+    return;
   }
   // Git for Windows starts another git.exe, ssh.exe and index-pack. Killing only
   // the wrapper leaves those children holding the destination and output pipes.
