@@ -130,12 +130,11 @@ export class Publisher {
     const configArgs = ['--config', '_config.yml,.forblog/hexo.yml'];
     if (force || configChanged) {
       this.log('全局配置变化或请求完整构建，重建 Hexo 缓存…');
-      await run(this.settings.nodePath, [cli, 'clean', ...configArgs], this.settings.blogDir, { signal: this.signal });
+      await run(this.settings.nodePath, [cli, 'clean', ...configArgs], this.settings.blogDir, { signal: this.signal, log: this.log, label: 'Hexo 清理缓存' });
     }
     this.log('Hexo 构建中…');
-    const generated = await run(this.settings.nodePath, [cli, 'generate', '--bail', ...configArgs], this.settings.blogDir, { signal: this.signal });
-    if (generated.stdout) this.log(generated.stdout);
-    if (generated.stderr) this.log(generated.stderr);
+    await run(this.settings.nodePath, [cli, 'generate', '--bail', ...configArgs], this.settings.blogDir, { signal: this.signal, log: this.log, label: 'Hexo 构建' });
+    this.log('Hexo 构建完成，正在校验文章和附件…');
     for (const note of Object.values(manifest.notes)) {
       const output = await inside(this.settings.blogDir, `public/posts/${note.slug}/index.html`);
       if (!await exists(output) || !(await fs.stat(output)).size) throw new Error(`Hexo 未生成文章页面：${note.slug}`);

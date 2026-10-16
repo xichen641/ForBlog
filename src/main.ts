@@ -1,18 +1,20 @@
 import { App, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile } from 'obsidian';
-import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { DEFAULT_SETTINGS, type Settings, type VaultSource } from './types';
 import { parseNote, articleUrl, markedForPublishing, safeName } from './core';
 import { Publisher } from './publisher';
 import { PreviewServer } from './preview';
 import { redact } from './process';
+import { applyPublishDraft, needsPublishProperties, publishDefaults, type PublishDraft } from './properties';
 
 class ObsidianSource implements VaultSource {
   private snapshots = new Map<string, string>();
-  constructor(private app: App) {
+  constructor(private app: App, overrides?: Map<string, string>) {
     for (const leaf of app.workspace.getLeavesOfType('markdown')) {
       if (leaf.view instanceof MarkdownView && leaf.view.file) this.snapshots.set(leaf.view.file.path, leaf.view.editor.getValue());
     }
+    // Front Matter writes can finish before the open editor/cache refreshes.
+    for (const [name, raw] of overrides ?? []) this.snapshots.set(name, raw);
   }
   async listNotes(): Promise<string[]> { return this.app.vault.getMarkdownFiles().map(f => f.path); }
   async readNote(name: string): Promise<string> {
@@ -47,35 +49,37 @@ class ProgressModal extends Modal {
 }
 
 class PublishProperties extends Modal {
-  constructor(app: App, private file: TFile, private onSaved: () => void) { super(app); }
+  private settled = false;
+  private saving = false;
+  constructor(app: App, private file: TFile, private draft: PublishDraft, private complete: (saved: string | null) => void, private continuation?: string, private fixedSlug?: string) { super(app); }
   onOpen(): void {
     this.titleEl.setText('设置博客发布属性');
-    const current = this.app.metadataCache.getFileCache(this.file)?.frontmatter ?? {};
-    let title = typeof current.title === 'string' ? current.title : this.file.basename;
-    let slug = typeof current.blog_slug === 'string' ? current.blog_slug : '';
-    let tags = Array.isArray(current.tags) ? current.tags.join(', ') : '';
-    let categories = Array.isArray(current.categories) ? current.categories.join(', ') : '';
-    new Setting(this.contentEl).setName('标题').addText(t => t.setValue(title).onChange(v => title = v));
-    new Setting(this.contentEl).setName('网址名称').setDesc('小写字母、数字和连字符。首次导出后固定。').addText(t => t.setPlaceholder('clip-reid').setValue(slug).onChange(v => slug = v.trim()));
-    new Setting(this.contentEl).setName('标签').setDesc('用逗号分隔').addText(t => t.setValue(tags).onChange(v => tags = v));
-    new Setting(this.contentEl).setName('分类').setDesc('用逗号分隔；按 Hexo 分类层级解释').addText(t => t.setValue(categories).onChange(v => categories = v));
-    this.contentEl.createEl('p', { text: '保存后将标记 blog_publish: true。文章正文及其引用附件会在你执行发布命令时公开。' });
-    new Setting(this.contentEl).addButton(b => b.setButtonText('保存发布属性').setCta().onClick(async () => {
-      if (!safeName(slug, true)) { new Notice('网址名称只能包含小写字母、数字和连字符，且不能是系统保留名称'); return; }
+    this.contentEl.createEl('p', { text: `已根据「${this.file.basename}」预填发布模板，你可以修改后保存。取消不会修改笔记。` });
+    new Setting(this.contentEl).setName('标题').addText(t => t.setValue(this.draft.title).onChange(v => this.draft.title = v));
+    new Setting(this.contentEl).setName('网址名称').setDesc(this.fixedSlug ? '已导出文章的网址保持固定。' : '已自动生成，可修改为小写英文、数字和连字符。首次导出后固定。').addText(t => t.setPlaceholder('clip-reid').setValue(this.draft.slug).setDisabled(!!this.fixedSlug).onChange(v => this.draft.slug = v.trim()));
+    new Setting(this.contentEl).setName('发布日期').setDesc('支持 ISO 日期时间，例如 2026-10-16T10:00:00+08:00。').addText(t => t.setValue(this.draft.date).onChange(v => this.draft.date = v));
+    new Setting(this.contentEl).setName('更新时间（可选）').setDesc('留空时由插件按公开内容变化自动维护。').addText(t => t.setValue(this.draft.updated).onChange(v => this.draft.updated = v));
+    new Setting(this.contentEl).setName('标签').setDesc('用逗号分隔').addText(t => t.setValue(this.draft.tags).onChange(v => this.draft.tags = v));
+    new Setting(this.contentEl).setName('分类').setDesc('默认取笔记所在文件夹，可修改；用逗号分隔。').addText(t => t.setValue(this.draft.categories).onChange(v => this.draft.categories = v));
+    this.contentEl.createEl('p', { text: this.continuation === '发布' ? '保存后将标记为可公开文章，并立即继续发布到配置的博客。' : this.continuation ? `保存后将标记为可公开文章，并继续${this.continuation}；本次操作不会推送。` : '保存后将标记为可公开文章，正文及引用附件会在你执行发布命令时公开。' });
+    new Setting(this.contentEl).addButton(b => b.setButtonText('取消').onClick(() => this.close())).addButton(b => b.setButtonText(this.continuation ? `保存并继续${this.continuation}` : '保存发布属性').setCta().onClick(async () => {
+      if (this.saving) return;
       try {
+        applyPublishDraft({}, this.draft);
+        if (this.fixedSlug && this.draft.slug !== this.fixedSlug) throw new Error('已导出文章的网址不能修改');
+        this.saving = true;
         await this.app.fileManager.processFrontMatter(this.file, fm => {
-          fm.title = title.trim() || this.file.basename;
-          fm.blog_id ??= randomUUID();
-          fm.blog_slug = slug;
-          fm.blog_publish = true;
-          fm.date ||= new Date().toISOString();
-          fm.tags = tags.split(/[,，]/).map(t => t.trim()).filter(Boolean);
-          fm.categories = categories.split(/[,，]/).map(t => t.trim()).filter(Boolean);
+          applyPublishDraft(fm, this.draft);
         });
-        this.close(); this.onSaved();
+        const saved = await this.app.vault.read(this.file);
+        this.settled = true;
+        this.complete(saved);
+        this.close();
       } catch (error) { new Notice(`保存失败：${String(error)}`); }
+      finally { this.saving = false; }
     }));
   }
+  onClose(): void { if (!this.settled) { this.settled = true; this.complete(null); } }
 }
 
 class ConfirmUnpublish extends Modal {
@@ -90,6 +94,8 @@ class ConfirmUnpublish extends Modal {
 export default class ForBlogPlugin extends Plugin {
   settings: Settings = { ...DEFAULT_SETTINGS };
   private busy = false;
+  private preparing = false;
+  private propertiesModal?: PublishProperties;
   private controller?: AbortController;
   private preview = new PreviewServer();
   private status!: HTMLElement;
@@ -104,8 +110,8 @@ export default class ForBlogPlugin extends Plugin {
       if (!checking) action(file);
       return true;
     } });
-    currentCommand('configure-note', '设置当前笔记的发布属性', f => new PublishProperties(this.app, f, () => new Notice('发布属性已保存')).open());
-    currentCommand('check-note', '检查当前笔记的发布变更', f => void this.task(async (publisher, source, log) => {
+    currentCommand('configure-note', '设置当前笔记的发布属性', f => void this.noteTask(f));
+    currentCommand('check-note', '检查当前笔记的发布变更', f => void this.noteTask(f, '检查', async (publisher, source, log) => {
       const plans = await publisher.check([f.path]);
       const manifest = await publisher.manifest();
       const note = plans[0]!;
@@ -114,15 +120,15 @@ export default class ForBlogPlugin extends Plugin {
       for (const warning of note.warnings) log(`提示：${warning}`);
       log(articleUrl((await publisher.config()).siteUrl, note.slug));
     }));
-    currentCommand('export-note', '仅同步当前笔记到 Hexo（不推送）', f => void this.task(async publisher => { await publisher.export([f.path]); }));
-    currentCommand('preview-note', '预览当前笔记（不推送）', f => void this.task(async (publisher, source, log) => {
+    currentCommand('export-note', '仅同步当前笔记到 Hexo（不推送）', f => void this.noteTask(f, '同步', async publisher => { await publisher.export([f.path]); }));
+    currentCommand('preview-note', '预览当前笔记（不推送）', f => void this.noteTask(f, '预览', async (publisher, source, log) => {
       const result = await publisher.publish([f.path], { preview: true });
       const { siteUrl } = await publisher.config();
       await this.preview.start(path.join(publisher.settings.blogDir, 'public'), siteUrl, publisher.settings.previewPort);
       const url = this.preview.url(siteUrl, result.plans[0]!.slug, publisher.settings.previewPort);
       log(url); window.open(url);
     }));
-    currentCommand('publish-note', '发布当前笔记（增量）', f => void this.task(async publisher => {
+    currentCommand('publish-note', '发布当前笔记（增量）', f => void this.noteTask(f, '发布', async publisher => {
       const result = await publisher.publish([f.path]);
       new Notice(result.deployment?.pushed ? 'Git 推送完成；Pages 上线待验证' : '没有需要推送的静态文件');
     }));
@@ -159,19 +165,46 @@ export default class ForBlogPlugin extends Plugin {
     this.addRibbonIcon('send', 'ForBlog：发布当前笔记', () => {
       const file = this.app.workspace.getActiveFile();
       if (!file || file.extension !== 'md') { new Notice('请先打开一篇 Markdown 笔记'); return; }
-      void this.task(async publisher => { await publisher.publish([file.path]); });
+      void this.noteTask(file, '发布', async publisher => { await publisher.publish([file.path]); });
     });
     this.registerEvent(this.app.workspace.on('file-menu', (menu, file) => {
-      if (file instanceof TFile && file.extension === 'md') menu.addItem(item => item.setTitle('ForBlog：发布到博客').setIcon('send').onClick(() => void this.task(async publisher => { await publisher.publish([file.path]); })));
+      if (file instanceof TFile && file.extension === 'md') menu.addItem(item => item.setTitle('ForBlog：发布到博客').setIcon('send').onClick(() => void this.noteTask(file, '发布', async publisher => { await publisher.publish([file.path]); })));
     }));
   }
-  private async task(action: (publisher: Publisher, source: VaultSource, log: (line: string) => void) => Promise<void>): Promise<void> {
-    if (this.busy) { new Notice('ForBlog 正在处理另一个任务'); return; }
+  private async noteTask(file: TFile, continuation?: string, action?: (publisher: Publisher, source: VaultSource, log: (line: string) => void) => Promise<void>): Promise<void> {
+    if (this.busy || this.preparing) { new Notice('ForBlog 正在处理另一个任务'); return; }
+    this.preparing = true;
+    let overrides: Map<string, string> | undefined;
+    try {
+      const source = new ObsidianSource(this.app);
+      const note = parseNote(file.path, await source.readNote(file.path));
+      if (!action || needsPublishProperties(note.meta)) {
+        const manifest = await new Publisher({ ...this.settings }, source).manifest();
+        const entry = Object.entries(manifest.notes).find(([id, item]) => id === note.meta.blog_id || item.source === file.path);
+        const existing = entry ? { id: entry[0], slug: entry[1].slug, date: entry[1].date } : undefined;
+        const draft = publishDefaults(file.path, note.meta, existing);
+        const saved = await new Promise<string | null>(resolve => {
+          this.propertiesModal = new PublishProperties(this.app, file, draft, resolve, continuation, existing?.slug);
+          this.propertiesModal.open();
+        });
+        if (saved === null) return;
+        overrides = new Map([[file.path, saved]]);
+        if (!action) new Notice('发布属性已保存');
+      }
+    } catch (error) {
+      new Notice(`ForBlog：${redact(error instanceof Error ? error.message : String(error))}`, 9000);
+      return;
+    } finally { this.preparing = false; this.propertiesModal = undefined; }
+    // Create the publishing snapshot after the form has saved, never before it.
+    if (action) await this.task(action, overrides);
+  }
+  private async task(action: (publisher: Publisher, source: VaultSource, log: (line: string) => void) => Promise<void>, overrides?: Map<string, string>): Promise<void> {
+    if (this.busy || this.preparing) { new Notice('ForBlog 正在处理另一个任务'); return; }
     this.busy = true; this.controller = new AbortController();
     this.status.setText('ForBlog：处理中');
     const modal = new ProgressModal(this.app, () => this.controller?.abort()); modal.open();
     const log = (line: string) => modal.log(line);
-    const source = new ObsidianSource(this.app);
+    const source = new ObsidianSource(this.app, overrides);
     try {
       await action(new Publisher({ ...this.settings }, source, log, this.controller.signal), source, log);
       log('任务完成'); this.status.setText('ForBlog：就绪');
@@ -180,7 +213,7 @@ export default class ForBlogPlugin extends Plugin {
       log(`失败：${message}`); new Notice(`ForBlog：${message}`, 9000); this.status.setText('ForBlog：操作失败');
     } finally { modal.finish(); this.busy = false; this.controller = undefined; }
   }
-  onunload(): void { this.controller?.abort(); void this.preview.stop(); }
+  onunload(): void { this.propertiesModal?.close(); this.controller?.abort(); void this.preview.stop(); }
   async saveSettings(): Promise<void> { await this.saveData(this.settings); }
 }
 

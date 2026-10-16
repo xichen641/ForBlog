@@ -1,6 +1,6 @@
 {
   "name": "forblog",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Incremental Obsidian to Hexo publishing",
   "private": true,
   "type": "module",
@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "node esbuild.config.mjs --watch",
     "build": "tsc --noEmit && node esbuild.config.mjs",
-    "test": "node --import tsx --test tests/core.test.ts tests/publisher.test.ts tests/hexo.test.ts tests/plugin.test.ts",
+    "test": "node --import tsx --test tests/core.test.ts tests/publisher.test.ts tests/hexo.test.ts tests/plugin.test.ts tests/properties.test.ts tests/process.test.ts tests/git.test.ts",
     "check": "npm run build && npm test",
     "package": "npm run build && node scripts/package.mjs",
     "install:local": "node scripts/install.mjs"
